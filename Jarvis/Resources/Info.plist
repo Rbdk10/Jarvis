@@ -22,6 +22,8 @@
     <false/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Jarvis needs the microphone so you can talk to it.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Jarvis listens on-device for the wake word “Jarvis” so it knows when you’re talking to it.</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSceneManifest</key>
