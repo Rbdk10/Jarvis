@@ -100,11 +100,34 @@ final class JarvisViewModel: ObservableObject {
         }
     }
 
-    /// Wake word heard — hand off to command capture.
+    /// Wake word heard — greet briefly, then open the mic to listen. (Saying my name
+    /// gets a quick acknowledgement; a screen tap does not — see `tapToListen`.)
     private func onWake() {
         guard handsFree, state == .idle else { return }
-        statusText = "Listening…"
-        armListening()
+        speechGen &+= 1
+        let gen = speechGen
+        state = .speaking
+        statusText = "…"
+        Task {
+            do { try await voice.speak(text: greeting()) } catch { }
+            guard gen == speechGen else { return }   // superseded (e.g. a tap/interrupt)
+            state = .idle; level = 0
+            armListening()
+        }
+    }
+
+    /// Screen-tap activation: open the mic immediately with NO greeting — you just start
+    /// talking. During speech a tap interrupts (same as the stop button).
+    func tapToListen() {
+        switch state {
+        case .idle:       wake.stop(); armListening()   // skip the wake word, listen now
+        case .speaking:   interrupt()                   // cut me off and take over
+        case .listening, .thinking, .error: break       // already listening / busy
+        }
+    }
+
+    private func greeting() -> String {
+        ["Yes, sir?", "Sir?", "At your service.", "Go ahead, sir."].randomElement() ?? "Yes, sir?"
     }
 
     /// Open the mic and wait for speech. Capture begins automatically when you start
