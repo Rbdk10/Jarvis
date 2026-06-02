@@ -1,0 +1,14 @@
+# Secrets — NEVER commit (contains ElevenLabs key + WS token)
+Secrets.xcconfig
+
+# Build output
+build/
+DerivedData/
+
+# Xcode user-specific state
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+
+# macOS
+.DS_Store
