@@ -27,7 +27,9 @@ enum AppConfig {
     }
 
     // ElevenLabs voice tuning (matches the Jarvis telegram-voice.env).
-    static let ttsModel = "eleven_multilingual_v2"
+    // Low-latency model so Jarvis starts speaking sooner. (Was eleven_multilingual_v2 —
+    // richer but slower; switch back if the voice quality is missed.)
+    static let ttsModel = "eleven_turbo_v2_5"
     static let sttModel = "scribe_v1"
     static let stability = 0.83
     static let similarity = 0.55
