@@ -12,3 +12,12 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# fastlane / secrets
+fastlane/.env
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output/
+*.p8
+*.ipa
+*.dSYM.zip
