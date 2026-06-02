@@ -33,6 +33,10 @@ final class JarvisViewModel: ObservableObject {
     private let runUpToStart = 3            // ~0.15s of voice to begin capture
     private let silenceToEnd = 20           // ~1.0s of trailing silence to end (×0.05s)
 
+    // Speech serialisation — guarantees Jarvis never talks over himself.
+    private var speechGen = 0               // bumped per reply / interrupt; stale tasks no-op
+    private var speakingText = ""           // currently-spoken text, for duplicate suppression
+
     init() {
         socket.onReply = { [weak self] text in self?.handleReply(text) }
         socket.onError = { [weak self] msg in self?.setError(msg) }
@@ -149,17 +153,45 @@ final class JarvisViewModel: ObservableObject {
     }
 
     private func handleReply(_ text: String) {
+        // Ignore an exact duplicate of what we're already saying (the bridge can echo
+        // a reply twice) — this is what caused two overlapping voices.
+        if state == .speaking, text == speakingText { return }
+
+        speechGen &+= 1
+        let gen = speechGen
+        speakingText = text
+
+        // Close the mic while speaking so it can't capture Jarvis's own voice.
+        armed = false; heardSpeech = false; recorder.stop()
+
         state = .speaking
         statusText = "Speaking…"
         Task {
             do {
                 try await voice.speak(text: text)
+                guard gen == speechGen else { return }   // superseded by a newer reply / interrupt
                 state = .idle; statusText = "Ready"; level = 0
                 // Re-arm after a short beat so the tail of Jarvis's voice doesn't retrigger.
                 try? await Task.sleep(nanoseconds: 350_000_000)
+                guard gen == speechGen else { return }
                 armListening()
-            } catch { setError(humanReadable(error)) }
+            } catch {
+                guard gen == speechGen else { return }
+                setError(humanReadable(error))
+            }
         }
+    }
+
+    /// Stop Jarvis mid-sentence and hand the floor straight back to you.
+    func interrupt() {
+        guard state == .speaking else { return }
+        speechGen &+= 1            // invalidate the in-flight speak task
+        speakingText = ""
+        voice.stop()               // cut the audio now
+        level = 0
+        state = .idle
+        statusText = "Ready"
+        armListening()             // immediately ready to hear you
     }
 
     private func setError(_ msg: String) {

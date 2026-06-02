@@ -44,11 +44,28 @@ struct ContentView: View {
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.5))
                     .padding(.top, 6)
-                listenToggle
-                    .padding(.top, 28)
-                    .padding(.bottom, 48)
+                Group {
+                    if vm.state == .speaking {
+                        stopButton
+                    } else {
+                        listenToggle
+                    }
+                }
+                .padding(.top, 28)
+                .padding(.bottom, 48)
             }
         }
+    }
+
+    /// Shown only while Jarvis is speaking — tap to interrupt and start talking.
+    private var stopButton: some View {
+        Circle()
+            .fill(Color(uiColor: blueWhite).opacity(0.18))
+            .frame(width: 84, height: 84)
+            .overlay(Image(systemName: "stop.fill").font(.title).foregroundStyle(.white))
+            .overlay(Circle().stroke(Color(uiColor: blueWhite), lineWidth: 2))
+            .onTapGesture { vm.interrupt() }
+            .accessibilityLabel("Stop Jarvis and talk")
     }
 
     private var activityLine: some View {

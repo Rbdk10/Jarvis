@@ -21,6 +21,19 @@ final class ElevenLabsService: NSObject, ObservableObject {
     private var player: AVAudioPlayer?
     private var meterTimer: Timer?
     private var onFinish: (() -> Void)?
+    /// Bumped on every stop/new playback. Guards against two utterances overlapping:
+    /// any in-flight playback whose token is stale tears itself down silently.
+    private var playToken = 0
+
+    /// Immediately stop any current playback and release a waiting `speak`.
+    func stop() {
+        playToken &+= 1
+        meterTimer?.invalidate(); meterTimer = nil
+        player?.stop(); player = nil
+        playbackLevel = 0
+        let finish = onFinish; onFinish = nil
+        finish?()
+    }
 
     // MARK: Speech-to-text
     func transcribe(fileURL: URL) async throws -> String {
@@ -56,6 +69,9 @@ final class ElevenLabsService: NSObject, ObservableObject {
     // MARK: Text-to-speech + playback
     func speak(text: String) async throws {
         guard !AppConfig.elevenLabsAPIKey.isEmpty else { throw ELError.noKey }
+        // Supersede anything already playing/pending, then claim this generation.
+        stop()
+        let token = playToken
         var req = URLRequest(url: URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(AppConfig.voiceID)")!)
         req.httpMethod = "POST"
         req.setValue(AppConfig.elevenLabsAPIKey, forHTTPHeaderField: "xi-api-key")
@@ -78,10 +94,12 @@ final class ElevenLabsService: NSObject, ObservableObject {
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ELError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
         }
-        try await play(data: data)
+        try await play(data: data, token: token)
     }
 
-    private func play(data: Data) async throws {
+    private func play(data: Data, token: Int) async throws {
+        // Superseded while the TTS was downloading — don't start a second voice.
+        guard token == playToken else { return }
         try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try AVAudioSession.sharedInstance().setActive(true)
         let p = try AVAudioPlayer(data: data)
@@ -89,10 +107,11 @@ final class ElevenLabsService: NSObject, ObservableObject {
         p.delegate = self
         player = p
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            guard token == playToken else { cont.resume(); return }
             self.onFinish = { cont.resume() }
             p.play()
             self.meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                guard let self, let pl = self.player else { return }
+                guard let self, self.playToken == token, let pl = self.player else { return }
                 pl.updateMeters()
                 self.playbackLevel = AudioLevel.normalize(pl.averagePower(forChannel: 0))
             }
@@ -105,7 +124,9 @@ extension ElevenLabsService: AVAudioPlayerDelegate {
         Task { @MainActor in
             self.meterTimer?.invalidate(); self.meterTimer = nil
             self.playbackLevel = 0
-            self.onFinish?(); self.onFinish = nil
+            self.player = nil
+            let finish = self.onFinish; self.onFinish = nil
+            finish?()
         }
     }
 }
