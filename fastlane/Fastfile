@@ -26,7 +26,8 @@ platform :ios do
       project: "Jarvis.xcodeproj",
       scheme: "Jarvis",
       export_method: "app-store",
-      xcargs: "-allowProvisioningUpdates"
+      api_key: api_key,                       # lets -allowProvisioningUpdates auth on a
+      xcargs: "-allowProvisioningUpdates"     # headless CI runner (no signed-in Xcode account)
     )
 
     upload_to_testflight(
