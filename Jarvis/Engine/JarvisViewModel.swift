@@ -21,7 +21,9 @@ final class JarvisViewModel: ObservableObject {
     let socket = JarvisSocket()
     private let recorder = AudioRecorder()
     private let voice = ElevenLabsService()
+    private let wake = WakeWordListener()
     private var bag = Set<AnyCancellable>()
+    private var speechAuthRequested = false
 
     // MARK: Voice-activity detection
     private var armed = false               // mic is open, waiting for / capturing speech
@@ -38,6 +40,7 @@ final class JarvisViewModel: ObservableObject {
     private var speakingText = ""           // currently-spoken text, for duplicate suppression
 
     init() {
+        wake.onWake = { [weak self] in self?.onWake() }
         socket.onReply = { [weak self] text in self?.handleReply(text) }
         socket.onError = { [weak self] msg in self?.setError(msg) }
         socket.onStatus = { [weak self] label in
@@ -64,7 +67,7 @@ final class JarvisViewModel: ObservableObject {
                 case .connected:
                     if self.state == .idle {
                         self.statusText = "Ready"
-                        self.armListening()
+                        self.beginIdleListening()
                     }
                 case .connecting:   self.statusText = "Connecting…"
                 case .disconnected: self.statusText = "Offline"
@@ -75,6 +78,32 @@ final class JarvisViewModel: ObservableObject {
     }
 
     // MARK: Hands-free listening
+
+    /// Idle behaviour: listen on-device for the wake word "Jarvis". Only once it's
+    /// heard do we open the mic to capture a command (see `onWake`). This is why
+    /// background chatter no longer triggers Jarvis.
+    func beginIdleListening() {
+        guard handsFree, state == .idle else { return }
+        recorder.stop()           // ensure the command recorder isn't holding the mic
+        armed = false
+        Task {
+            if !speechAuthRequested {
+                speechAuthRequested = true
+                _ = await WakeWordListener.requestAuthorization()
+                guard await recorder.requestPermission() else { setError("Microphone denied"); return }
+            }
+            guard handsFree, state == .idle else { return }
+            wake.start()
+            statusText = "Say “Jarvis” to wake me"
+        }
+    }
+
+    /// Wake word heard — hand off to command capture.
+    private func onWake() {
+        guard handsFree, state == .idle else { return }
+        statusText = "Listening…"
+        armListening()
+    }
 
     /// Open the mic and wait for speech. Capture begins automatically when you start
     /// talking and ends after a short trailing silence.
@@ -120,10 +149,11 @@ final class JarvisViewModel: ObservableObject {
     func toggleHandsFree() {
         handsFree.toggle()
         if handsFree {
-            armListening()
+            beginIdleListening()
         } else {
             armed = false
             heardSpeech = false
+            wake.stop()
             recorder.stop()
             if state == .listening { state = .idle }
             level = 0
@@ -141,7 +171,7 @@ final class JarvisViewModel: ObservableObject {
         let captured = heardSpeech
         heardSpeech = false
         let file = recorder.stop()
-        guard captured, let file else { state = .idle; statusText = "Ready"; armListening(); return }
+        guard captured, let file else { state = .idle; statusText = "Ready"; beginIdleListening(); return }
 
         state = .thinking
         statusText = "Thinking…"
@@ -150,7 +180,7 @@ final class JarvisViewModel: ObservableObject {
             do {
                 let text = try await voice.transcribe(fileURL: file)
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    state = .idle; statusText = "Ready"; armListening(); return
+                    state = .idle; statusText = "Ready"; beginIdleListening(); return
                 }
                 socket.send(text: text)
             } catch { setError(humanReadable(error)) }
@@ -176,10 +206,11 @@ final class JarvisViewModel: ObservableObject {
                 try await voice.speak(text: text)
                 guard gen == speechGen else { return }   // superseded by a newer reply / interrupt
                 state = .idle; statusText = "Ready"; level = 0
-                // Re-arm after a short beat so the tail of Jarvis's voice doesn't retrigger.
+                // Back to wake-word listening after a short beat so the tail of
+                // Jarvis's voice doesn't get mistaken for the wake word.
                 try? await Task.sleep(nanoseconds: 350_000_000)
                 guard gen == speechGen else { return }
-                armListening()
+                beginIdleListening()
             } catch {
                 guard gen == speechGen else { return }
                 setError(humanReadable(error))
