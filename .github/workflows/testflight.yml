@@ -1,0 +1,68 @@
+name: TestFlight
+
+# Builds the app and uploads it to TestFlight on every push to main (and on demand).
+# All credentials come from repository secrets — nothing sensitive is in the repo.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Write Secrets.xcconfig
+        run: |
+          cat > Secrets.xcconfig <<EOF
+          ELEVENLABS_API_KEY = ${{ secrets.ELEVENLABS_API_KEY }}
+          JARVIS_WS_HOST = sirjarvis.ngrok.app
+          JARVIS_WS_TOKEN = ${{ secrets.JARVIS_WS_TOKEN }}
+          JARVIS_VOICE_ID = ELng4b01d9xlW69WLEz8
+          EOF
+
+      - name: Install App Store Connect API key
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "${{ secrets.ASC_API_P8 }}" > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+
+      - name: Archive
+        run: |
+          xcodebuild -project Jarvis.xcodeproj -scheme Jarvis -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Jarvis.xcarchive" archive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
+            DEVELOPMENT_TEAM=6V4DVV45UP \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }}
+
+      - name: Export IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Jarvis.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist .github/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
+
+      - name: Upload to TestFlight
+        run: |
+          IPA="$(find "$RUNNER_TEMP/export" -name '*.ipa' | head -1)"
+          echo "Uploading $IPA"
+          xcrun altool --upload-app --type ios --file "$IPA" \
+            --apiKey "${{ secrets.ASC_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}"
