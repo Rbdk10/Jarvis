@@ -39,8 +39,10 @@ platform :ios do
       project: "Jarvis.xcodeproj",
       scheme: "Jarvis",
       export_method: "app-store",
-      xcargs: "-allowProvisioningUpdates#{auth_args}",
-      export_xcargs: "-allowProvisioningUpdates#{auth_args}"
+      xcargs: "-allowProvisioningUpdates#{auth_args}"
+      # NB: no export_xcargs — gym already injects -allowProvisioningUpdates + the auth
+      # key into the export step, and passing them again trips
+      # "xcodebuild: error: option '-authenticationKeyPath' may only be provided once".
     )
 
     upload_to_testflight(
