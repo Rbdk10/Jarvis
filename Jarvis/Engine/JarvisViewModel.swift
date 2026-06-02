@@ -33,7 +33,7 @@ final class JarvisViewModel: ObservableObject {
     private let speechOn: Float = 0.16      // level to count as voice (with hysteresis)
     private let speechOff: Float = 0.09
     private let runUpToStart = 3            // ~0.15s of voice to begin capture
-    private let silenceToEnd = 20           // ~1.0s of trailing silence to end (×0.05s)
+    private let silenceToEnd = 13           // ~0.65s of trailing silence to end (×0.05s) — snappier turn-taking
     private var noSpeechTicks = 0           // ticks listening-but-silent after the wake word
     private let noSpeechTimeout = 160       // ~8s of no speech → drop back to wake word
 
