@@ -132,11 +132,16 @@ final class JarvisViewModel: ObservableObject {
     }
 
     private func finishUtterance() {
-        guard armed, let file = recorder.stop() else { return }
+        // Clear `armed` BEFORE stopping the recorder. recorder.stop() publishes a final
+        // level=0 through recorder.$level, which synchronously re-enters handleMicLevel;
+        // if `armed` were still true that re-entry would call finishUtterance again →
+        // stop() → level=0 → … infinite recursion → stack overflow (the crash).
+        guard armed else { return }
         armed = false
         let captured = heardSpeech
         heardSpeech = false
-        guard captured else { state = .idle; armListening(); return }
+        let file = recorder.stop()
+        guard captured, let file else { state = .idle; statusText = "Ready"; armListening(); return }
 
         state = .thinking
         statusText = "Thinking…"

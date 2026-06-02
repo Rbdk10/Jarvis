@@ -44,10 +44,11 @@ final class AudioRecorder: NSObject, ObservableObject {
 
     @discardableResult
     func stop() -> URL? {
+        guard recorder != nil else { return nil }   // idempotent: a 2nd stop must not re-publish level
         meterTimer?.invalidate(); meterTimer = nil
         recorder?.stop()
         recorder = nil
-        level = 0
+        if level != 0 { level = 0 }                  // avoid a redundant publish that could feed a loop
         return fileURL
     }
 }
