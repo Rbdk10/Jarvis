@@ -34,6 +34,8 @@ final class JarvisViewModel: ObservableObject {
     private let speechOff: Float = 0.09
     private let runUpToStart = 3            // ~0.15s of voice to begin capture
     private let silenceToEnd = 20           // ~1.0s of trailing silence to end (×0.05s)
+    private var noSpeechTicks = 0           // ticks listening-but-silent after the wake word
+    private let noSpeechTimeout = 160       // ~8s of no speech → drop back to wake word
 
     // Speech serialisation — guarantees Jarvis never talks over himself.
     private var speechGen = 0               // bumped per reply / interrupt; stale tasks no-op
@@ -117,8 +119,12 @@ final class JarvisViewModel: ObservableObject {
                 heardSpeech = false
                 voiceRunUp = 0
                 silenceTicks = 0
+                noSpeechTicks = 0
                 level = 0
-                if state == .idle { statusText = "Listening…" }
+                // Go blue and "listening" the instant we open the mic — no waiting for
+                // the first word. Capture still starts on real speech, ends on silence.
+                state = .listening
+                statusText = "Listening…"
             } catch { setError(error.localizedDescription) }
         }
     }
@@ -127,13 +133,20 @@ final class JarvisViewModel: ObservableObject {
         guard armed else { return }
 
         if !heardSpeech {
-            // Waiting for you to start speaking.
+            // Mic is already blue/listening. Wait for real speech to begin the capture,
+            // but don't sit open forever if nothing is said after the wake word.
             voiceRunUp = lvl > speechOn ? voiceRunUp + 1 : 0
             if voiceRunUp >= runUpToStart {
                 heardSpeech = true
                 silenceTicks = 0
-                state = .listening
-                statusText = "Listening…"
+            } else {
+                noSpeechTicks += 1
+                if noSpeechTicks >= noSpeechTimeout {
+                    armed = false
+                    recorder.stop()
+                    state = .idle
+                    beginIdleListening()   // back to waiting for "Jarvis"
+                }
             }
         } else {
             // Capturing — watch for a trailing silence to end the utterance.
