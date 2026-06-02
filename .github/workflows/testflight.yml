@@ -1,0 +1,41 @@
+name: TestFlight
+
+# Ship to TestFlight from GitHub's cloud, using the repository secrets.
+# Triggered on demand (Jarvis runs it) — the App Store Connect key lives only in
+# secrets and is written to the runner at build time, never committed.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  ship:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Write Secrets.xcconfig
+        run: |
+          cat > Secrets.xcconfig <<EOF
+          ELEVENLABS_API_KEY = ${{ secrets.ELEVENLABS_API_KEY }}
+          JARVIS_WS_HOST = sirjarvis.ngrok.app
+          JARVIS_WS_TOKEN = ${{ secrets.JARVIS_WS_TOKEN }}
+          JARVIS_VOICE_ID = ELng4b01d9xlW69WLEz8
+          EOF
+
+      - name: Install App Store Connect API key
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "${{ secrets.ASC_API_P8 }}" > "$RUNNER_TEMP/keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8"
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8" >> "$GITHUB_ENV"
+
+      - name: fastlane beta
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: fastlane beta
