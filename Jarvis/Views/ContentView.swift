@@ -22,6 +22,13 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
+            // Tap anywhere on the core/background to start listening (no greeting).
+            // Sits beneath the bottom controls, so the mic/stop button still get their taps.
+            Color.clear
+                .contentShape(Rectangle())
+                .ignoresSafeArea()
+                .onTapGesture { vm.tapToListen() }
+
             // Live activity log — what Jarvis is doing while thinking. Sits above the
             // orb and quietly disappears once he starts speaking or goes idle.
             VStack {
