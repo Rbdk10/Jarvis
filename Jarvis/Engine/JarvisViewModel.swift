@@ -219,11 +219,14 @@ final class JarvisViewModel: ObservableObject {
                 try await voice.speak(text: text)
                 guard gen == speechGen else { return }   // superseded by a newer reply / interrupt
                 state = .idle; statusText = "Ready"; level = 0
-                // Back to wake-word listening after a short beat so the tail of
-                // Jarvis's voice doesn't get mistaken for the wake word.
+                // Conversation mode: after replying, open the mic for a follow-up so you
+                // can answer straight back WITHOUT saying "Jarvis" again. If you don't
+                // speak within the no-speech window, armListening's timeout drops back to
+                // wake-word listening. Short beat first so the tail of Jarvis's own voice
+                // isn't caught as your reply.
                 try? await Task.sleep(nanoseconds: 350_000_000)
                 guard gen == speechGen else { return }
-                beginIdleListening()
+                armListening()
             } catch {
                 guard gen == speechGen else { return }
                 setError(humanReadable(error))
