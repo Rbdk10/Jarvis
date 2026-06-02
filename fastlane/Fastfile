@@ -22,12 +22,25 @@ platform :ios do
       build_number: (latest + 1).to_s
     )
 
+    # Pass App Store Connect auth to xcodebuild so -allowProvisioningUpdates can create
+    # the distribution cert/profile on a headless CI runner (no signed-in Xcode account).
+    # Locally these come from fastlane/.env; in CI from the workflow. Falls back to plain
+    # provisioning updates if unset (e.g. a Mac with a signed-in account).
+    auth_args =
+      if ENV["ASC_KEY_PATH"] && ENV["ASC_KEY_ID"] && ENV["ASC_ISSUER_ID"]
+        " -authenticationKeyPath #{ENV['ASC_KEY_PATH']}" \
+        " -authenticationKeyID #{ENV['ASC_KEY_ID']}" \
+        " -authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}"
+      else
+        ""
+      end
+
     build_app(
       project: "Jarvis.xcodeproj",
       scheme: "Jarvis",
       export_method: "app-store",
-      api_key: api_key,                       # lets -allowProvisioningUpdates auth on a
-      xcargs: "-allowProvisioningUpdates"     # headless CI runner (no signed-in Xcode account)
+      xcargs: "-allowProvisioningUpdates#{auth_args}",
+      export_xcargs: "-allowProvisioningUpdates#{auth_args}"
     )
 
     upload_to_testflight(
