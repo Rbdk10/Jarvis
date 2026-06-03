@@ -126,8 +126,21 @@ final class JarvisViewModel: ObservableObject {
         case .idle:       wake.stop(); armListening()   // skip the wake word, listen now
         case .listening:  submitListening()             // tap while blue → send what I've said
         case .speaking:   interrupt()                   // cut me off and take over
-        case .thinking, .error: break                   // busy
+        case .error:      recover()                     // tap the red mic to retry, no restart
+        case .thinking:   break                          // busy
         }
+    }
+
+    /// Leave the error state and get listening again — so a transient hiccup never
+    /// requires force-closing the app. Triggered by a tap, and automatically a beat
+    /// after any error (see `setError`).
+    func recover() {
+        guard case .error = state else { return }
+        wake.stop(); recorder.stop(); voice.stop()
+        armed = false; heardSpeech = false; level = 0
+        state = .idle
+        statusText = "Ready"
+        beginIdleListening()
     }
 
     /// Manual full-stop: while listening, submit whatever's been captured and send it —
@@ -298,6 +311,12 @@ final class JarvisViewModel: ObservableObject {
     private func setError(_ msg: String) {
         armed = false; heardSpeech = false
         state = .error(msg); statusText = msg; level = 0
+        // Self-heal: a transient error (network/STT/TTS blip) shouldn't brick the app.
+        // Return to listening after a short beat unless something already moved us on.
+        Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if case .error = state { recover() }
+        }
     }
 
     private func humanReadable(_ error: Error) -> String {
