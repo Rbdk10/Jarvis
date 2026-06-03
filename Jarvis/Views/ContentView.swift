@@ -62,6 +62,8 @@ struct ContentView: View {
                 Group {
                     if vm.state == .speaking {
                         stopButton
+                    } else if vm.state == .listening {
+                        submitButton
                     } else {
                         listenToggle
                     }
@@ -228,6 +230,18 @@ struct ContentView: View {
             .overlay(Circle().stroke(Color(uiColor: blueWhite), lineWidth: 2))
             .onTapGesture { vm.interrupt() }
             .accessibilityLabel("Stop Jarvis and talk")
+    }
+
+    /// Shown while listening (blue): tap to submit what you've said and send it.
+    private var submitButton: some View {
+        Circle()
+            .fill(Color(uiColor: blueWhite).opacity(0.85))
+            .frame(width: 84, height: 84)
+            .overlay(Image(systemName: "arrow.up").font(.system(size: 30, weight: .bold)).foregroundStyle(.white))
+            .overlay(Circle().stroke(Color(uiColor: blueWhite), lineWidth: 2))
+            .scaleEffect(1.08)
+            .onTapGesture { vm.submitListening() }
+            .accessibilityLabel("Done — send what I said")
     }
 
     private var activityLine: some View {
