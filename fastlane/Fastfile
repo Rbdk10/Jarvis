@@ -71,4 +71,35 @@ platform :ios do
       skip_waiting_for_build_processing: true
     )
   end
+
+  desc "Ship from a Mac with a signed-in Apple account (automatic signing; no match vault)"
+  lane :beta_local do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_filepath: ENV["ASC_KEY_PATH"]
+    )
+
+    sh("cd .. && xcodegen generate")
+
+    # Same pre-ship guardrail as `beta`: build + launch in a sim, abort on crash.
+    sh("cd .. && bash tools/smoke_test.sh")
+
+    latest = latest_testflight_build_number(api_key: api_key, app_identifier: "com.agrisol.Jarvis")
+    increment_build_number(xcodeproj: "Jarvis.xcodeproj", build_number: (latest + 1).to_s)
+
+    # Automatic signing; the API key lets -allowProvisioningUpdates create/download the
+    # cert + profile headlessly (how builds 1-13 shipped from the laptop). No match vault.
+    auth = " -authenticationKeyPath #{ENV['ASC_KEY_PATH']}" \
+           " -authenticationKeyID #{ENV['ASC_KEY_ID']}" \
+           " -authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}"
+    build_app(
+      project: "Jarvis.xcodeproj",
+      scheme: "Jarvis",
+      export_method: "app-store",
+      xcargs: "-allowProvisioningUpdates#{auth}"
+    )
+
+    upload_to_testflight(api_key: api_key, skip_waiting_for_build_processing: true)
+  end
 end
