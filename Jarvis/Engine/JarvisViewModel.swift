@@ -124,9 +124,18 @@ final class JarvisViewModel: ObservableObject {
     func tapToListen() {
         switch state {
         case .idle:       wake.stop(); armListening()   // skip the wake word, listen now
+        case .listening:  submitListening()             // tap while blue → send what I've said
         case .speaking:   interrupt()                   // cut me off and take over
-        case .listening, .thinking, .error: break       // already listening / busy
+        case .thinking, .error: break                   // busy
         }
+    }
+
+    /// Manual full-stop: while listening, submit whatever's been captured and send it —
+    /// so you're never stuck recording if the auto silence-detection doesn't trigger.
+    func submitListening() {
+        guard state == .listening, armed else { return }
+        heardSpeech = true        // treat what we have as the utterance, even without a detected onset
+        finishUtterance()
     }
 
     private func greeting() -> String {
