@@ -20,6 +20,8 @@ struct ContentView: View {
     @State private var showArtifacts = false
     @State private var expandedArtifact: JarvisArtifact?
 
+    @State private var showLog = false
+
     var body: some View {
         ZStack {
             RadialGradient(colors: [Color(white: 0.06), .black],
@@ -102,20 +104,40 @@ struct ContentView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+
+            // Swipe right → activity log (left drawer): step-by-step, timestamped.
+            HStack(spacing: 0) {
+                if showLog {
+                    activityLogPanel
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+                Spacer(minLength: 0)
+            }
         }
         .gesture(
             DragGesture(minimumDistance: 25)
                 .onEnded { v in
-                    guard abs(v.translation.height) > 50, abs(v.translation.width) < 120 else { return }
-                    let down = v.translation.height > 0
-                    // The orb screen is the "middle". Each swipe moves one step, always
-                    // via the middle — never straight from text box to artifacts.
+                    let dx = v.translation.width, dy = v.translation.height
+                    if abs(dx) > abs(dy) {
+                        // Horizontal: swipe right → activity log; swipe left → back to middle.
+                        guard abs(dx) > 50 else { return }
+                        if dx > 0 {
+                            withAnimation { showLog = true; showInput = false; showArtifacts = false }
+                            inputFocused = false
+                        } else {
+                            withAnimation { showLog = false }
+                        }
+                        return
+                    }
+                    // Vertical: the orb screen is the "middle"; one step at a time.
+                    guard abs(dy) > 50 else { return }
+                    if showLog { withAnimation { showLog = false }; return }
+                    let down = dy > 0
                     if showInput {
-                        if !down { withAnimation { showInput = false }; inputFocused = false }  // up → back to middle
+                        if !down { withAnimation { showInput = false }; inputFocused = false }  // up → middle
                     } else if showArtifacts {
-                        if down { withAnimation { showArtifacts = false } }                     // down → back to middle
+                        if down { withAnimation { showArtifacts = false } }                     // down → middle
                     } else {
-                        // at the middle: down → text box, up → artifacts
                         if down {
                             withAnimation { showInput = true }
                             inputFocused = true
@@ -189,6 +211,83 @@ struct ContentView: View {
         case "html":  return "doc.richtext"
         default:       return "doc.text"
         }
+    }
+
+    /// Swipe-right drawer: a timestamped, step-by-step trace of what Jarvis is doing,
+    /// with the gap between each step — to see where the response time goes.
+    private var activityLogPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button { withAnimation { showLog = false } } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                Text("Activity").font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.top, 18).padding(.bottom, 10)
+
+            if vm.activityLog.isEmpty {
+                Spacer()
+                Text("No activity yet.\nTalk to me and the steps\nappear here, timed.")
+                    .font(.footnote).foregroundStyle(.white.opacity(0.4))
+                    .multilineTextAlignment(.center)
+                Spacer()
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(vm.activityLog.enumerated()), id: \.element.id) { i, entry in
+                                logRow(entry, prev: i > 0 ? vm.activityLog[i - 1] : nil).id(entry.id)
+                            }
+                        }
+                        .padding(.horizontal, 12).padding(.bottom, 20)
+                    }
+                    .onChange(of: vm.activityLog.count) {
+                        if let last = vm.activityLog.last {
+                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 300)
+        .frame(maxHeight: .infinity)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(Color(uiColor: blueWhite).opacity(0.25)).frame(width: 1)
+        }
+        .ignoresSafeArea(edges: .vertical)
+    }
+
+    private func logRow(_ e: ActivityEntry, prev: ActivityEntry?) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(clockString(e.time))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                if let prev {
+                    Text(deltaString(prev.time, e.time))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(uiColor: blueWhite).opacity(0.85))
+                }
+            }
+            .frame(width: 62, alignment: .trailing)
+            Text(e.text)
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func clockString(_ d: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f.string(from: d)
+    }
+    private func deltaString(_ a: Date, _ b: Date) -> String {
+        String(format: "+%.1fs", b.timeIntervalSince(a))
     }
 
     /// Swipe-down text entry — type/paste a message; sent to Jarvis like a voice command.
