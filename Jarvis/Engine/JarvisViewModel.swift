@@ -39,6 +39,7 @@ final class JarvisViewModel: ObservableObject {
     private let recorder = AudioRecorder()
     private let voice = ElevenLabsService()
     private let wake = WakeWordListener()
+    private let onDeviceSTT = OnDeviceSTT()
     private var bag = Set<AnyCancellable>()
     private var speechAuthRequested = false
 
@@ -287,7 +288,13 @@ final class JarvisViewModel: ObservableObject {
         log("✍️ Transcribing your speech…")
         Task {
             do {
-                let text = try await voice.transcribe(fileURL: file)
+                // On-device STT first (instant, no network). Fall back to cloud STT only
+                // if local recognition is unavailable or yields nothing.
+                var text = await onDeviceSTT.transcribe(fileURL: file) ?? ""
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    log("↩︎ on-device STT empty — using cloud")
+                    text = try await voice.transcribe(fileURL: file)
+                }
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     log("(no speech heard)")
                     state = .idle; statusText = "Ready"; beginIdleListening(); return

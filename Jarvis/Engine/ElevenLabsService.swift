@@ -162,8 +162,43 @@ final class ElevenLabsService: NSObject, ObservableObject {
         // Supersede a previous reply, but leave any filler playing to cover the fetch.
         stopMain()
         let token = playToken
-        let data = try await renderTTS(text: text)
-        try await play(data: data, token: token)
+
+        // Split long replies into sentence-sized chunks and pipeline them: render the
+        // next chunk while the current one plays, so the FIRST words land as soon as one
+        // short clip is ready — not after the whole reply has been synthesised.
+        let parts = Self.splitIntoChunks(text)
+        guard !parts.isEmpty else { return }
+        var current = try await renderTTS(text: parts[0])
+        for i in parts.indices {
+            guard token == playToken else { return }
+            let next: Task<Data?, Never>? = (i + 1 < parts.count)
+                ? Task { [weak self] in try? await self?.renderTTS(text: parts[i + 1]) }
+                : nil
+            try await play(data: current, token: token)   // plays + awaits completion
+            guard token == playToken else { return }
+            if let next {
+                guard let data = await next.value else { break }
+                current = data
+            }
+        }
+    }
+
+    /// Break a reply at sentence boundaries so the first chunk is short (fast first audio).
+    /// Short replies stay as a single chunk (no benefit to splitting them).
+    private static func splitIntoChunks(_ text: String) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 60 else { return trimmed.isEmpty ? [] : [trimmed] }
+        var chunks: [String] = []
+        var current = ""
+        for ch in trimmed {
+            current.append(ch)
+            if ".!?".contains(ch) && current.trimmingCharacters(in: .whitespaces).count >= 20 {
+                chunks.append(current.trimmingCharacters(in: .whitespaces)); current = ""
+            }
+        }
+        let tail = current.trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty { chunks.append(tail) }
+        return chunks.isEmpty ? [trimmed] : chunks
     }
 
     private func play(data: Data, token: Int) async throws {
