@@ -38,6 +38,7 @@ final class JarvisViewModel: ObservableObject {
     private let silenceToEnd = 8            // ~0.4s of trailing silence to end (×0.05s) — snappier turn-taking
     private var noSpeechTicks = 0           // ticks listening-but-silent after the wake word
     private let noSpeechTimeout = 160       // ~8s of no speech → drop back to wake word
+    private var recentPeak: Float = 0       // decaying peak of your speaking volume (adaptive endpointing)
 
     // Speech serialisation — guarantees Jarvis never talks over himself.
     private var speechGen = 0               // bumped per reply / interrupt; stale tasks no-op
@@ -182,6 +183,7 @@ final class JarvisViewModel: ObservableObject {
                 voiceRunUp = 0
                 silenceTicks = 0
                 noSpeechTicks = 0
+                recentPeak = 0
                 level = 0
                 // Go blue and "listening" the instant we open the mic — no waiting for
                 // the first word. Capture still starts on real speech, ends on silence.
@@ -201,6 +203,7 @@ final class JarvisViewModel: ObservableObject {
             if voiceRunUp >= runUpToStart {
                 heardSpeech = true
                 silenceTicks = 0
+                recentPeak = lvl
             } else {
                 noSpeechTicks += 1
                 if noSpeechTicks >= noSpeechTimeout {
@@ -211,8 +214,13 @@ final class JarvisViewModel: ObservableObject {
                 }
             }
         } else {
-            // Capturing — watch for a trailing silence to end the utterance.
-            silenceTicks = lvl < speechOff ? silenceTicks + 1 : 0
+            // Capturing — end on a trailing silence judged RELATIVE to your own speaking
+            // volume (a decaying peak), so steady background noise below your voice still
+            // registers as a pause. This makes auto-stop reliable in noisy rooms, not just
+            // quiet ones. The fixed speechOff is a floor for very soft speech.
+            recentPeak = max(recentPeak * 0.95, lvl)
+            let endThreshold = max(speechOff, recentPeak * 0.45)
+            silenceTicks = lvl < endThreshold ? silenceTicks + 1 : 0
             if silenceTicks >= silenceToEnd {
                 finishUtterance()
             }
