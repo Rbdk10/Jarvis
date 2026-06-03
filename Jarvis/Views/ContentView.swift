@@ -4,11 +4,19 @@ import WebKit
 struct ContentView: View {
     @EnvironmentObject var vm: JarvisViewModel
 
-    // Blue-white throughout, per Antoonie. Only an error tints the orb red.
+    // UI chrome stays cool blue-white. Only an error tints it red.
     private let blueWhite = UIColor(red: 0.55, green: 0.80, blue: 1.00, alpha: 1)
     private var accent: UIColor {
         if case .error = vm.state { return UIColor(red: 1.0, green: 0.30, blue: 0.30, alpha: 1) }
         return blueWhite
+    }
+
+    // The energy orb: amber by default (the J.A.R.V.I.S. look), blue while *you* talk.
+    private let orbAmber = UIColor(red: 1.0, green: 0.55, blue: 0.15, alpha: 1)
+    private let orbBlue  = UIColor(red: 0.30, green: 0.66, blue: 1.0, alpha: 1)
+    private var orbAccent: UIColor {
+        if case .error = vm.state { return UIColor(red: 1.0, green: 0.30, blue: 0.30, alpha: 1) }
+        return vm.state == .listening ? orbBlue : orbAmber
     }
 
     private var isThinking: Bool { vm.state == .thinking }
@@ -28,8 +36,12 @@ struct ContentView: View {
                            center: .center, startRadius: 5, endRadius: 500)
                 .ignoresSafeArea()
 
-            OrbView(level: vm.level, accent: accent)
+            OrbView(level: vm.level, accent: orbAccent)
                 .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+            // Faint HUD: a couple of concentric rings + corner ticks around the orb.
+            hudOverlay
                 .allowsHitTesting(false)
 
             // Tap anywhere on the core/background to start listening (no greeting).
@@ -330,6 +342,40 @@ struct ContentView: View {
         withAnimation { showInput = false }
         inputFocused = false
         vm.sendTyped(text)
+    }
+
+    /// Faint heads-up display around the orb: two concentric rings + corner ticks.
+    private var hudOverlay: some View {
+        GeometryReader { geo in
+            let c = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            ZStack {
+                Circle()
+                    .stroke(Color(uiColor: orbAccent).opacity(0.12), lineWidth: 1)
+                    .frame(width: 300, height: 300).position(c)
+                Circle()
+                    .stroke(Color(uiColor: orbAccent).opacity(0.16),
+                            style: StrokeStyle(lineWidth: 1, dash: [2, 9]))
+                    .frame(width: 344, height: 344).position(c)
+                ForEach(0..<4, id: \.self) { i in cornerTick(i, in: geo.size) }
+            }
+        }
+    }
+
+    private func cornerTick(_ idx: Int, in size: CGSize) -> some View {
+        let inset: CGFloat = 20, len: CGFloat = 16
+        let specs: [(CGPoint, CGFloat, CGFloat)] = [
+            (CGPoint(x: inset, y: inset), 1, 1),
+            (CGPoint(x: size.width - inset, y: inset), -1, 1),
+            (CGPoint(x: inset, y: size.height - inset), 1, -1),
+            (CGPoint(x: size.width - inset, y: size.height - inset), -1, -1)
+        ]
+        let (p, sx, sy) = specs[idx]
+        return Path { path in
+            path.move(to: CGPoint(x: p.x + sx * len, y: p.y))
+            path.addLine(to: p)
+            path.addLine(to: CGPoint(x: p.x, y: p.y + sy * len))
+        }
+        .stroke(Color(uiColor: orbAccent).opacity(0.22), lineWidth: 1.5)
     }
 
     /// Shown only while Jarvis is speaking — tap to interrupt and start talking.
