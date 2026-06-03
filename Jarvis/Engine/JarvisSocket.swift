@@ -1,8 +1,18 @@
 import Foundation
 
+/// An artifact pushed from the Jarvis backend (jarvis_artifact tool): text, html or
+/// a base64 image. Shown in the swipe-up artifacts panel.
+struct JarvisArtifact: Identifiable, Equatable {
+    let id = UUID()
+    let kind: String        // "text" | "html" | "image"
+    let name: String
+    let data: String        // text/html string, or base64 image data
+    let timestamp: Date
+}
+
 /// WebSocket client to the Jarvis bridge. Text-only protocol:
 ///   send:    {"type":"message","text": "..."}
-///   receive: {"type":"reply","text": "..."} / "status" / "error"
+///   receive: {"type":"reply","text": "..."} / "status" / "error" / "artifact"
 @MainActor
 final class JarvisSocket: NSObject, ObservableObject {
     enum Status { case disconnected, connecting, connected }
@@ -11,6 +21,7 @@ final class JarvisSocket: NSObject, ObservableObject {
     var onReply: ((String) -> Void)?
     var onStatus: ((String) -> Void)?
     var onError: ((String) -> Void)?
+    var onArtifact: ((JarvisArtifact) -> Void)?
 
     private let session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
@@ -75,6 +86,13 @@ final class JarvisSocket: NSObject, ObservableObject {
         case "reply":  if let text = obj["text"] as? String { onReply?(text) }
         case "status": if let label = obj["label"] as? String { onStatus?(label) }
         case "error":  onError?(obj["message"] as? String ?? "error")
+        case "artifact":
+            onArtifact?(JarvisArtifact(
+                kind: (obj["artifact_type"] as? String) ?? (obj["kind"] as? String) ?? "text",
+                name: (obj["name"] as? String) ?? "Untitled",
+                data: (obj["data"] as? String) ?? "",
+                timestamp: Date()
+            ))
         default: break
         }
     }
