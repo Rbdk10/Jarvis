@@ -130,6 +130,20 @@ final class JarvisViewModel: ObservableObject {
         ["Yes, sir?", "Sir?", "At your service.", "Go ahead, sir."].randomElement() ?? "Yes, sir?"
     }
 
+    /// Send typed/pasted text to Jarvis (from the swipe-down text box), routed exactly
+    /// like a transcribed voice command. Supersedes any current listening/speaking.
+    func sendTyped(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        wake.stop(); armed = false; heardSpeech = false; recorder.stop()
+        voice.stop()                 // cut any in-flight speech
+        speechGen &+= 1              // invalidate the superseded speak task
+        state = .thinking
+        statusText = "Thinking…"
+        level = 0
+        socket.send(text: t)
+    }
+
     /// Open the mic and wait for speech. Capture begins automatically when you start
     /// talking and ends after a short trailing silence.
     func armListening() {

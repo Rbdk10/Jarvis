@@ -12,6 +12,10 @@ struct ContentView: View {
 
     private var isThinking: Bool { vm.state == .thinking }
 
+    @State private var showInput = false
+    @State private var draft = ""
+    @FocusState private var inputFocused: Bool
+
     var body: some View {
         ZStack {
             RadialGradient(colors: [Color(white: 0.06), .black],
@@ -61,7 +65,71 @@ struct ContentView: View {
                 .padding(.top, 28)
                 .padding(.bottom, 48)
             }
+
+            // Swipe down from anywhere to reveal a text box; type or paste for Jarvis.
+            VStack {
+                if showInput {
+                    textInputBar
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                Spacer()
+            }
+            .padding(.top, 6)
         }
+        .gesture(
+            DragGesture(minimumDistance: 25)
+                .onEnded { v in
+                    if v.translation.height > 50 && abs(v.translation.width) < 120 {
+                        withAnimation { showInput = true }
+                        inputFocused = true
+                    } else if v.translation.height < -50 {
+                        withAnimation { showInput = false }
+                        inputFocused = false
+                    }
+                }
+        )
+    }
+
+    /// Swipe-down text entry — type/paste a message; sent to Jarvis like a voice command.
+    private var textInputBar: some View {
+        HStack(spacing: 10) {
+            TextField("Type or paste for Jarvis…", text: $draft, axis: .vertical)
+                .lineLimit(1...5)
+                .foregroundStyle(.white)
+                .tint(Color(uiColor: blueWhite))
+                .focused($inputFocused)
+                .submitLabel(.send)
+                .onSubmit(sendDraft)
+
+            Button(action: sendDraft) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(Color(uiColor: blueWhite))
+            }
+            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Button {
+                withAnimation { showInput = false }
+                inputFocused = false
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(uiColor: blueWhite).opacity(0.3), lineWidth: 1))
+        .padding(.horizontal, 12)
+    }
+
+    private func sendDraft() {
+        let text = draft
+        draft = ""
+        withAnimation { showInput = false }
+        inputFocused = false
+        vm.sendTyped(text)
     }
 
     /// Shown only while Jarvis is speaking — tap to interrupt and start talking.
