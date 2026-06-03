@@ -76,6 +76,8 @@ final class WakeWordListener: ObservableObject {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var running = false
+    private var retryWork: DispatchWorkItem?
+    private var retryCount = 0
 
     static func requestAuthorization() async -> Bool {
         await withCheckedContinuation { cont in
@@ -87,26 +89,37 @@ final class WakeWordListener: ObservableObject {
 
     func start() {
         guard !running, let recognizer, recognizer.isAvailable else { return }
-        running = true
 
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .measurement,
-                                 options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
-        try? session.setActive(true, options: .notifyOthersOnDeactivation)
+        do {
+            try session.setCategory(.playAndRecord, mode: .measurement,
+                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        } catch { retryStart(); return }
+
+        let input = engine.inputNode
+        input.removeTap(onBus: 0)                 // never install over an existing tap
+
+        // installTap throws an UNCATCHABLE Obj-C exception if the format is invalid
+        // (0 Hz / 0 channels) — which happens when the mic isn't input-ready yet, e.g.
+        // right after TTS playback. Guard the precondition and retry rather than crash.
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { retryStart(); return }
 
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
         request = req
 
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             req.append(buffer)
         }
         engine.prepare()
-        do { try engine.start() } catch { running = false; return }
+        do { try engine.start() }
+        catch { input.removeTap(onBus: 0); request = nil; retryStart(); return }
 
+        running = true
+        retryCount = 0
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             if let result,
                result.bestTranscription.formattedString.lowercased().contains("jarvis") {
@@ -118,8 +131,20 @@ final class WakeWordListener: ObservableObject {
         }
     }
 
+    /// The mic can take a moment to become input-ready after the player releases the
+    /// session. Retry shortly (bounded) instead of installing a tap with a bad format.
+    private func retryStart() {
+        retryWork?.cancel()
+        guard retryCount < 10 else { retryCount = 0; return }
+        retryCount += 1
+        let work = DispatchWorkItem { [weak self] in self?.start() }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
     func stop() {
-        guard running else { return }   // idempotent
+        retryWork?.cancel(); retryWork = nil
+        retryCount = 0
         running = false
         task?.cancel(); task = nil
         engine.inputNode.removeTap(onBus: 0)
