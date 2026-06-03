@@ -3,6 +3,11 @@ default_platform(:ios)
 platform :ios do
   desc "Bump build number, archive, and upload to TestFlight"
   lane :beta do
+    # In CI, create + unlock a temporary keychain and install the signing identity into
+    # it. Without this, codesign blocks on a keychain-access prompt that a headless
+    # runner can never answer — the build hangs forever at "Signing Jarvis.app".
+    setup_ci if ENV["CI"]
+
     api_key = app_store_connect_api_key(
       key_id: ENV["ASC_KEY_ID"],
       issuer_id: ENV["ASC_ISSUER_ID"],
@@ -26,7 +31,7 @@ platform :ios do
       app_identifier: "com.agrisol.Jarvis",
       api_key: api_key,
       git_url: "https://github.com/AnthonieDeKlerk78/jarvis-match.git",
-      readonly: false   # allow first-run creation; reuses the stored identity afterwards
+      readonly: true    # vault already seeded — fetch + install the stored identity, never create
     )
 
     # Next build number = one above the latest already on TestFlight.
