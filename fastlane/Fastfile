@@ -17,6 +17,18 @@ platform :ios do
     # reaching TestFlight — applies whether the laptop OR the agent runs `fastlane beta`.
     sh("cd .. && bash tools/smoke_test.sh")
 
+    # Fetch (or, on the very first run, create) ONE reusable signing identity from the
+    # encrypted match vault — instead of minting a brand-new certificate every build.
+    # THIS is what stops the "maximum number of certificates" wall: the cert is created
+    # once, stored in the private vault repo, and reused by every build thereafter.
+    match(
+      type: "appstore",
+      app_identifier: "com.agrisol.Jarvis",
+      api_key: api_key,
+      git_url: "https://github.com/AnthonieDeKlerk78/jarvis-match.git",
+      readonly: false   # allow first-run creation; reuses the stored identity afterwards
+    )
+
     # Next build number = one above the latest already on TestFlight.
     latest = latest_testflight_build_number(
       api_key: api_key,
@@ -27,27 +39,26 @@ platform :ios do
       build_number: (latest + 1).to_s
     )
 
-    # Pass App Store Connect auth to xcodebuild so -allowProvisioningUpdates can create
-    # the distribution cert/profile on a headless CI runner (no signed-in Xcode account).
-    # Locally these come from fastlane/.env; in CI from the workflow. Falls back to plain
-    # provisioning updates if unset (e.g. a Mac with a signed-in account).
-    auth_args =
-      if ENV["ASC_KEY_PATH"] && ENV["ASC_KEY_ID"] && ENV["ASC_ISSUER_ID"]
-        " -authenticationKeyPath #{ENV['ASC_KEY_PATH']}" \
-        " -authenticationKeyID #{ENV['ASC_KEY_ID']}" \
-        " -authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}"
-      else
-        ""
-      end
+    # Manual signing with the match profile (set AFTER xcodegen regenerated the project).
+    # No -allowProvisioningUpdates → xcodebuild never creates a new certificate.
+    profile_name = ENV["sigh_com.agrisol.Jarvis_appstore_profile-name"]
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "Jarvis.xcodeproj",
+      team_id: "6V4DVV45UP",
+      code_sign_identity: "Apple Distribution",
+      bundle_identifier: "com.agrisol.Jarvis",
+      profile_name: profile_name
+    )
 
     build_app(
       project: "Jarvis.xcodeproj",
       scheme: "Jarvis",
       export_method: "app-store",
-      xcargs: "-allowProvisioningUpdates#{auth_args}"
-      # NB: no export_xcargs — gym already injects -allowProvisioningUpdates + the auth
-      # key into the export step, and passing them again trips
-      # "xcodebuild: error: option '-authenticationKeyPath' may only be provided once".
+      export_options: {
+        signingStyle: "manual",
+        provisioningProfiles: { "com.agrisol.Jarvis" => profile_name }
+      }
     )
 
     upload_to_testflight(
