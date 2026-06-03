@@ -97,6 +97,10 @@ final class JarvisViewModel: ObservableObject {
             }.store(in: &bag)
 
         socket.connect()
+
+        // Pre-render the instant-acknowledgement clips in the background so the very
+        // first "thinking" moment already has them cached (no dead air, no network wait).
+        Task { await voice.prewarmFillers() }
     }
 
     // MARK: Hands-free listening
@@ -183,6 +187,7 @@ final class JarvisViewModel: ObservableObject {
         state = .thinking
         statusText = "Thinking…"
         level = 0
+        voice.playFiller()          // instant spoken acknowledgement → kills the dead air
         log("⌨️ Sent (typed): \(t)")
         socket.send(text: t)
     }
@@ -278,6 +283,7 @@ final class JarvisViewModel: ObservableObject {
         state = .thinking
         statusText = "Thinking…"
         level = 0
+        voice.playFiller()          // instant spoken acknowledgement → kills the dead air
         log("✍️ Transcribing your speech…")
         Task {
             do {
