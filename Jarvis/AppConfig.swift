@@ -8,6 +8,16 @@ enum AppConfig {
     }
 
     static var elevenLabsAPIKey: String { string("ELEVENLABS_API_KEY") }
+    /// Powers the on-device "fast brain" (two-speed: instant chit-chat here, real
+    /// tasks routed to the agent). Empty → fast brain disabled, everything goes to the agent.
+    static var anthropicAPIKey: String { string("ANTHROPIC_API_KEY") }
+    /// Low-latency model for the fast brain. Haiku: fast + cheap, ample for chit-chat
+    /// and routing. (Was nothing — this is the new in-app brain.)
+    static let fastBrainModel = "claude-haiku-4-5-20251001"
+    /// Hard ceiling on cumulative fast-brain spend (USD). At/above this the fast brain
+    /// switches OFF and every utterance goes to the (free-to-this-key) agent instead, so
+    /// the shared Anthropic credit can't be drained. Resetting the cost meter re-enables it.
+    static let fastBrainSpendCapUSD = 10.0
     // Public identifier (not a secret) → kept in source so it's in git and everyone
     // gets the same voice. Was ELng4b01d9xlW69WLEz8.
     static let voiceID = "ZGaKTfLiwmY6CuJeS9Tv"

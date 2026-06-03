@@ -8,9 +8,11 @@
 
 /* Begin PBXBuildFile section */
 		10EAD8AAAE0557B3C74F7AFA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 38F7EE3D1D2A994CDB90A35E /* Assets.xcassets */; };
+		2066544924A9330F7E9BD1A0 /* CostMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F4052212947FF19E613487 /* CostMeter.swift */; };
 		5386C84075EBD89BA2B6F46A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54BA3851E3D6DFA92BE9FD98 /* ContentView.swift */; };
 		5E25349CC3262A18DE554A01 /* JarvisApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD65447B9E4C38A85B4132FD /* JarvisApp.swift */; };
 		753AAF4C5EAADC2779BFD419 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87A14289F85E511E594A754 /* AppConfig.swift */; };
+		8E6822DAEF13ECC012A9B94F /* FastBrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D9120BF1DA0FE8148584E75 /* FastBrain.swift */; };
 		C412194D47D7A2CAF50B9C5C /* ElevenLabsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22F92E6AC9289680C6D0266 /* ElevenLabsService.swift */; };
 		D72D720F534489ED855B3178 /* OrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5520A77E12AFC71D61EE4B36 /* OrbView.swift */; };
 		E1BDAABEABB5CCBD95523927 /* JarvisViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A328C71272A498F8A8130FD3 /* JarvisViewModel.swift */; };
@@ -19,6 +21,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0D9120BF1DA0FE8148584E75 /* FastBrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastBrain.swift; sourceTree = "<group>"; };
 		38F7EE3D1D2A994CDB90A35E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		427F7DCD7749159168D9DAAB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		54BA3851E3D6DFA92BE9FD98 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -26,6 +29,7 @@
 		90FE558AB5215426176E67A3 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
 		A328C71272A498F8A8130FD3 /* JarvisViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisViewModel.swift; sourceTree = "<group>"; };
 		A4AB0635DC0D94E265FE34E3 /* JarvisSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisSocket.swift; sourceTree = "<group>"; };
+		A9F4052212947FF19E613487 /* CostMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CostMeter.swift; sourceTree = "<group>"; };
 		BD65447B9E4C38A85B4132FD /* JarvisApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JarvisApp.swift; sourceTree = "<group>"; };
 		D22F92E6AC9289680C6D0266 /* ElevenLabsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevenLabsService.swift; sourceTree = "<group>"; };
 		E17E5FA46AF71A144544C14F /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
@@ -38,7 +42,9 @@
 			isa = PBXGroup;
 			children = (
 				90FE558AB5215426176E67A3 /* AudioRecorder.swift */,
+				A9F4052212947FF19E613487 /* CostMeter.swift */,
 				D22F92E6AC9289680C6D0266 /* ElevenLabsService.swift */,
+				0D9120BF1DA0FE8148584E75 /* FastBrain.swift */,
 				A4AB0635DC0D94E265FE34E3 /* JarvisSocket.swift */,
 				A328C71272A498F8A8130FD3 /* JarvisViewModel.swift */,
 			);
@@ -175,7 +181,9 @@
 				753AAF4C5EAADC2779BFD419 /* AppConfig.swift in Sources */,
 				EED6109332AFB6C5B42BD805 /* AudioRecorder.swift in Sources */,
 				5386C84075EBD89BA2B6F46A /* ContentView.swift in Sources */,
+				2066544924A9330F7E9BD1A0 /* CostMeter.swift in Sources */,
 				C412194D47D7A2CAF50B9C5C /* ElevenLabsService.swift in Sources */,
+				8E6822DAEF13ECC012A9B94F /* FastBrain.swift in Sources */,
 				5E25349CC3262A18DE554A01 /* JarvisApp.swift in Sources */,
 				F6760E36F0F44A54F090426F /* JarvisSocket.swift in Sources */,
 				E1BDAABEABB5CCBD95523927 /* JarvisViewModel.swift in Sources */,
@@ -241,7 +249,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -327,7 +335,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

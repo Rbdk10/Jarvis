@@ -23,6 +23,14 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 
 Bump build number, archive, and upload to TestFlight
 
+### ios beta_local
+
+```sh
+[bundle exec] fastlane ios beta_local
+```
+
+Ship from a Mac with a signed-in Apple account (automatic signing; no match vault)
+
 ----
 
 This README.md is auto-generated and will be re-generated every time [_fastlane_](https://fastlane.tools) is run.

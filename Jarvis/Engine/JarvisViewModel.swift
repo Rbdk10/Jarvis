@@ -40,8 +40,13 @@ final class JarvisViewModel: ObservableObject {
     private let voice = ElevenLabsService()
     private let wake = WakeWordListener()
     private let onDeviceSTT = OnDeviceSTT()
+    /// Running tally of what the fast brain has cost on the Anthropic key (persisted).
+    let costMeter = CostMeter()
+    /// Fast half of the two-speed brain: answers chit-chat on-device, delegates tasks.
+    private lazy var fastBrain = FastBrain(meter: costMeter)
     private var bag = Set<AnyCancellable>()
     private var speechAuthRequested = false
+    private var capNoticeLogged = false     // one-time "spend cap reached" notice
 
     // MARK: Voice-activity detection
     private var armed = false               // mic is open, waiting for / capturing speech
@@ -184,13 +189,8 @@ final class JarvisViewModel: ObservableObject {
         guard !t.isEmpty else { return }
         wake.stop(); armed = false; heardSpeech = false; recorder.stop()
         voice.stop()                 // cut any in-flight speech
-        speechGen &+= 1              // invalidate the superseded speak task
-        state = .thinking
-        statusText = "Thinking…"
-        level = 0
-        voice.playFiller()          // instant spoken acknowledgement → kills the dead air
-        log("⌨️ Sent (typed): \(t)")
-        socket.send(text: t)
+        log("⌨️ You (typed): \(t)")
+        route(t)
     }
 
     /// Open the mic and wait for speech. Capture begins automatically when you start
@@ -284,7 +284,6 @@ final class JarvisViewModel: ObservableObject {
         state = .thinking
         statusText = "Thinking…"
         level = 0
-        voice.playFiller()          // instant spoken acknowledgement → kills the dead air
         log("✍️ Transcribing your speech…")
         Task {
             do {
@@ -299,9 +298,48 @@ final class JarvisViewModel: ObservableObject {
                     log("(no speech heard)")
                     state = .idle; statusText = "Ready"; beginIdleListening(); return
                 }
-                log("➡️ Sent: \(text)")
-                socket.send(text: text)
+                route(text)
             } catch { setError(humanReadable(error)) }
+        }
+    }
+
+    // MARK: Two-speed routing
+
+    /// The fork: every utterance (spoken or typed) goes to the fast brain first. Chit-chat
+    /// is answered here instantly; real work is handed to the agent over the socket (with a
+    /// spoken "one moment" filler to cover the longer round-trip). With no Anthropic key the
+    /// fast brain returns `.delegate`, so this collapses to the old "always ask the agent".
+    private func route(_ text: String) {
+        speechGen &+= 1              // this is now the live intent; supersede any stale speak
+        let gen = speechGen
+        state = .thinking
+        statusText = "Thinking…"
+        level = 0
+        log("➡️ You: \(text)")
+        // If the spend cap has tripped, say so once — then everything quietly goes to the
+        // agent (chit-chat is no longer instant, but voice still works and no more spend).
+        if fastBrain.isOverSpendCap, !capNoticeLogged {
+            capNoticeLogged = true
+            log("⚠️ Fast-brain spend cap (\(CostMeter.money(AppConfig.fastBrainSpendCapUSD))) reached — chit-chat now routes to the agent. Voice still works; reset the meter to re-enable.")
+        }
+        Task {
+            let decision = await fastBrain.decide(text)
+            // Surface the spend so you can watch it against your credit (the fast brain is
+            // the only thing on the Anthropic key). No-op line when the brain is disabled.
+            if fastBrain.isEnabled {
+                log("💰 \(costMeter.lastCallText) this turn · \(costMeter.totalText) total")
+            }
+            guard gen == speechGen else { return }   // interrupted/superseded while deciding
+            switch decision {
+            case .reply(let say):
+                log("⚡ Fast reply")
+                deliver(say)
+            case .delegate:
+                log("→ Handing to the agent")
+                statusText = "Working…"
+                voice.playFiller()   // instant acknowledgement → covers the agent round-trip
+                socket.send(text: text)
+            }
         }
     }
 
@@ -309,7 +347,14 @@ final class JarvisViewModel: ObservableObject {
         // Ignore an exact duplicate of what we're already saying (the bridge can echo
         // a reply twice) — this is what caused two overlapping voices.
         if state == .speaking, text == speakingText { return }
+        log("💬 Reply received: \(text)")
+        deliver(text)
+    }
 
+    /// Speak a reply we already have in hand — from the agent (handleReply) or the fast
+    /// brain (route) — then drop back into conversation mode. Bumping `speechGen` makes
+    /// this the live utterance, so an earlier in-flight speak/filler tears itself down.
+    private func deliver(_ text: String) {
         speechGen &+= 1
         let gen = speechGen
         speakingText = text
@@ -319,7 +364,6 @@ final class JarvisViewModel: ObservableObject {
 
         state = .speaking
         statusText = "Speaking…"
-        log("💬 Reply received: \(text)")
         log("🔊 Speaking…")
         Task {
             do {
