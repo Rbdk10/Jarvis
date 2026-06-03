@@ -1,6 +1,13 @@
 import Foundation
 import Combine
 
+/// One step in the activity trace (swipe-right log).
+struct ActivityEntry: Identifiable {
+    let id = UUID()
+    let time: Date
+    let text: String
+}
+
 /// Orchestrates: idle → listening → thinking → speaking → idle.
 /// Publishes `level` (0...1) for the orb and `state`/`statusText` for the UI.
 ///
@@ -19,6 +26,14 @@ final class JarvisViewModel: ObservableObject {
     @Published var handsFree: Bool = true
     /// Artifacts Jarvis has sent, newest last — shown in the swipe-up panel.
     @Published var artifacts: [JarvisArtifact] = []
+    /// Timestamped step-by-step trace of what Jarvis is doing — shown in the swipe-right
+    /// panel, so you can see exactly where the response time goes.
+    @Published var activityLog: [ActivityEntry] = []
+
+    private func log(_ text: String) {
+        activityLog.append(ActivityEntry(time: Date(), text: text))
+        if activityLog.count > 150 { activityLog.removeFirst(activityLog.count - 150) }
+    }
 
     let socket = JarvisSocket()
     private let recorder = AudioRecorder()
@@ -52,6 +67,7 @@ final class JarvisViewModel: ObservableObject {
         socket.onStatus = { [weak self] label in
             // Live "what I'm doing" feed — only meaningful while thinking.
             if self?.state == .thinking { self?.statusText = label }
+            self?.log(label)
         }
 
         // Mic meter drives voice-activity detection. It never drives the orb — the
@@ -167,6 +183,7 @@ final class JarvisViewModel: ObservableObject {
         state = .thinking
         statusText = "Thinking…"
         level = 0
+        log("⌨️ Sent (typed): \(t)")
         socket.send(text: t)
     }
 
@@ -189,6 +206,7 @@ final class JarvisViewModel: ObservableObject {
                 // the first word. Capture still starts on real speech, ends on silence.
                 state = .listening
                 statusText = "Listening…"
+                log("🎤 Listening")
             } catch { setError(error.localizedDescription) }
         }
     }
@@ -204,6 +222,7 @@ final class JarvisViewModel: ObservableObject {
                 heardSpeech = true
                 silenceTicks = 0
                 recentPeak = lvl
+                log("🗣️ Speech detected")
             } else {
                 noSpeechTicks += 1
                 if noSpeechTicks >= noSpeechTimeout {
@@ -259,12 +278,15 @@ final class JarvisViewModel: ObservableObject {
         state = .thinking
         statusText = "Thinking…"
         level = 0
+        log("✍️ Transcribing your speech…")
         Task {
             do {
                 let text = try await voice.transcribe(fileURL: file)
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    log("(no speech heard)")
                     state = .idle; statusText = "Ready"; beginIdleListening(); return
                 }
+                log("➡️ Sent: \(text)")
                 socket.send(text: text)
             } catch { setError(humanReadable(error)) }
         }
@@ -284,11 +306,14 @@ final class JarvisViewModel: ObservableObject {
 
         state = .speaking
         statusText = "Speaking…"
+        log("💬 Reply received: \(text)")
+        log("🔊 Speaking…")
         Task {
             do {
                 try await voice.speak(text: text)
                 guard gen == speechGen else { return }   // superseded by a newer reply / interrupt
                 state = .idle; statusText = "Ready"; level = 0
+                log("✓ Ready")
                 // Conversation mode: after replying, open the mic for a follow-up so you
                 // can answer straight back WITHOUT saying "Jarvis" again. If you don't
                 // speak within the no-speech window, armListening's timeout drops back to
@@ -319,6 +344,7 @@ final class JarvisViewModel: ObservableObject {
     private func setError(_ msg: String) {
         armed = false; heardSpeech = false
         state = .error(msg); statusText = msg; level = 0
+        log("⚠️ Error: \(msg)")
         // Self-heal: a transient error (network/STT/TTS blip) shouldn't brick the app.
         // Return to listening after a short beat unless something already moved us on.
         Task {
