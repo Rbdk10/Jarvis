@@ -17,6 +17,8 @@ final class JarvisViewModel: ObservableObject {
     @Published var statusText: String = "Connecting…"
     /// When true (default), Jarvis listens automatically. The button toggles this.
     @Published var handsFree: Bool = true
+    /// Artifacts Jarvis has sent, newest last — shown in the swipe-up panel.
+    @Published var artifacts: [JarvisArtifact] = []
 
     let socket = JarvisSocket()
     private let recorder = AudioRecorder()
@@ -45,6 +47,7 @@ final class JarvisViewModel: ObservableObject {
         wake.onWake = { [weak self] in self?.onWake() }
         socket.onReply = { [weak self] text in self?.handleReply(text) }
         socket.onError = { [weak self] msg in self?.setError(msg) }
+        socket.onArtifact = { [weak self] art in self?.artifacts.append(art) }
         socket.onStatus = { [weak self] label in
             // Live "what I'm doing" feed — only meaningful while thinking.
             if self?.state == .thinking { self?.statusText = label }

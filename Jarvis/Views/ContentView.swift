@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 struct ContentView: View {
     @EnvironmentObject var vm: JarvisViewModel
@@ -15,6 +16,9 @@ struct ContentView: View {
     @State private var showInput = false
     @State private var draft = ""
     @FocusState private var inputFocused: Bool
+
+    @State private var showArtifacts = false
+    @State private var expandedArtifact: JarvisArtifact?
 
     var body: some View {
         ZStack {
@@ -66,7 +70,7 @@ struct ContentView: View {
                 .padding(.bottom, 48)
             }
 
-            // Swipe down from anywhere to reveal a text box; type or paste for Jarvis.
+            // Swipe down (toward the top) → text box at the top.
             VStack {
                 if showInput {
                     textInputBar
@@ -75,19 +79,95 @@ struct ContentView: View {
                 Spacer()
             }
             .padding(.top, 6)
+
+            // Swipe up (toward the bottom) → artifacts panel at the bottom.
+            VStack {
+                Spacer()
+                if showArtifacts {
+                    artifactsPanel
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
         }
         .gesture(
             DragGesture(minimumDistance: 25)
                 .onEnded { v in
-                    if v.translation.height > 50 && abs(v.translation.width) < 120 {
-                        withAnimation { showInput = true }
+                    guard abs(v.translation.height) > 50, abs(v.translation.width) < 120 else { return }
+                    if v.translation.height > 0 {
+                        // pulling content down → reveal the top text box
+                        withAnimation { showInput = true; showArtifacts = false }
                         inputFocused = true
-                    } else if v.translation.height < -50 {
-                        withAnimation { showInput = false }
+                    } else {
+                        // pulling content up → reveal the bottom artifacts list
+                        withAnimation { showArtifacts = true; showInput = false }
                         inputFocused = false
                     }
                 }
         )
+        .sheet(item: $expandedArtifact) { art in
+            ArtifactDetailView(artifact: art)
+        }
+    }
+
+    /// Bottom panel: a chat-style list of artifact cards; tap one to expand it.
+    private var artifactsPanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Artifacts").font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer()
+                Button { withAnimation { showArtifacts = false } } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+
+            if vm.artifacts.isEmpty {
+                Text("Nothing yet — anything I hand you will appear here.")
+                    .font(.footnote).foregroundStyle(.white.opacity(0.4))
+                    .padding(.bottom, 16)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(vm.artifacts.reversed()) { art in
+                            artifactCard(art).onTapGesture { expandedArtifact = art }
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.bottom, 16)
+                }
+                .frame(maxHeight: 320)
+            }
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color(uiColor: blueWhite).opacity(0.25), lineWidth: 1))
+        .padding(.horizontal, 10).padding(.bottom, 8)
+    }
+
+    private func artifactCard(_ art: JarvisArtifact) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: artifactIcon(art.kind))
+                .font(.system(size: 18))
+                .foregroundStyle(Color(uiColor: blueWhite))
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(art.name).font(.system(size: 15, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                Text(art.kind.capitalized).font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+            }
+            Spacer()
+            Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(.white.opacity(0.3))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.06)))
+        .contentShape(Rectangle())
+    }
+
+    private func artifactIcon(_ kind: String) -> String {
+        switch kind {
+        case "image": return "photo"
+        case "html":  return "doc.richtext"
+        default:       return "doc.text"
+        }
     }
 
     /// Swipe-down text entry — type/paste a message; sent to Jarvis like a voice command.
@@ -174,5 +254,63 @@ struct ContentView: View {
             .animation(.spring(duration: 0.25), value: vm.state)
             .onTapGesture { vm.toggleHandsFree() }
             .accessibilityLabel(vm.handsFree ? "Listening hands-free. Tap to pause." : "Listening paused. Tap to resume.")
+    }
+}
+
+/// Full-screen view of a tapped artifact — renders text, HTML, or a base64 image.
+struct ArtifactDetailView: View {
+    let artifact: JarvisArtifact
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch artifact.kind {
+                case "image":
+                    if let img = decodeImage(artifact.data) {
+                        ScrollView([.horizontal, .vertical]) {
+                            Image(uiImage: img).resizable().scaledToFit()
+                        }
+                    } else {
+                        Text("Couldn't load this image.").foregroundStyle(.secondary)
+                    }
+                case "html":
+                    HTMLView(html: artifact.data)
+                default:
+                    ScrollView {
+                        Text(artifact.data)
+                            .font(.system(size: 15, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                    }
+                }
+            }
+            .navigationTitle(artifact.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
+        }
+    }
+
+    private func decodeImage(_ b64: String) -> UIImage? {
+        var s = b64
+        if s.hasPrefix("data:"), let comma = s.range(of: ",") { s = String(s[comma.upperBound...]) }
+        guard let data = Data(base64Encoded: s) else { return nil }
+        return UIImage(data: data)
+    }
+}
+
+struct HTMLView: UIViewRepresentable {
+    let html: String
+    func makeUIView(context: Context) -> WKWebView {
+        let v = WKWebView()
+        v.isOpaque = false
+        v.backgroundColor = .clear
+        return v
+    }
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(html, baseURL: nil)
     }
 }
