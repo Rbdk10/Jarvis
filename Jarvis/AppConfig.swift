@@ -8,7 +8,9 @@ enum AppConfig {
     }
 
     static var elevenLabsAPIKey: String { string("ELEVENLABS_API_KEY") }
-    static var voiceID: String { string("JARVIS_VOICE_ID") }
+    // Public identifier (not a secret) → kept in source so it's in git and everyone
+    // gets the same voice. Was ELng4b01d9xlW69WLEz8.
+    static let voiceID = "ZGaKTfLiwmY6CuJeS9Tv"
     static var wsToken: String { string("JARVIS_WS_TOKEN") }
     static var wsHost: String {
         let h = string("JARVIS_WS_HOST")
