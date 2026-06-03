@@ -93,14 +93,21 @@ struct ContentView: View {
             DragGesture(minimumDistance: 25)
                 .onEnded { v in
                     guard abs(v.translation.height) > 50, abs(v.translation.width) < 120 else { return }
-                    if v.translation.height > 0 {
-                        // pulling content down → reveal the top text box
-                        withAnimation { showInput = true; showArtifacts = false }
-                        inputFocused = true
+                    let down = v.translation.height > 0
+                    // The orb screen is the "middle". Each swipe moves one step, always
+                    // via the middle — never straight from text box to artifacts.
+                    if showInput {
+                        if !down { withAnimation { showInput = false }; inputFocused = false }  // up → back to middle
+                    } else if showArtifacts {
+                        if down { withAnimation { showArtifacts = false } }                     // down → back to middle
                     } else {
-                        // pulling content up → reveal the bottom artifacts list
-                        withAnimation { showArtifacts = true; showInput = false }
-                        inputFocused = false
+                        // at the middle: down → text box, up → artifacts
+                        if down {
+                            withAnimation { showInput = true }
+                            inputFocused = true
+                        } else {
+                            withAnimation { showArtifacts = true }
+                        }
                     }
                 }
         )
