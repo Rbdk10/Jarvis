@@ -123,9 +123,20 @@ final class JarvisViewModel: ObservableObject {
     /// talking. During speech a tap interrupts (same as the stop button).
     func tapToListen() {
         switch state {
-        case .idle:       wake.stop(); armListening()   // skip the wake word, listen now
-        case .speaking:   interrupt()                   // cut me off and take over
-        case .listening, .thinking, .error: break       // already listening / busy
+        case .idle:
+            wake.stop(); armListening()                 // skip the wake word, listen now
+        case .speaking:
+            // Barge in: stop my voice and listen — but the backend task keeps running.
+            speechGen &+= 1; speakingText = ""; voice.stop()
+            wake.stop(); armed = false; heardSpeech = false
+            startCapture()
+        case .thinking:
+            // Talk to me WHILE I work. The task isn't cancelled — your words are sent
+            // along as an aside; the backend folds them in. (App can't halt the task.)
+            wake.stop(); armed = false; heardSpeech = false
+            startCapture()
+        case .listening, .error:
+            break                                       // already listening
         }
     }
 
@@ -151,6 +162,13 @@ final class JarvisViewModel: ObservableObject {
     /// talking and ends after a short trailing silence.
     func armListening() {
         guard handsFree, state == .idle, !armed else { return }
+        startCapture()
+    }
+
+    /// Open the mic and go blue immediately, from any state. Capture begins on real
+    /// speech and ends on trailing silence. Used by wake/tap and by barge-in.
+    private func startCapture() {
+        guard !armed else { return }
         Task {
             guard await recorder.requestPermission() else { setError("Microphone denied"); return }
             do {
