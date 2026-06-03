@@ -1,10 +1,12 @@
 import SwiftUI
 import SceneKit
+import simd
 
-/// A soft luminous core wrapped in a cage of fine filament "strands" that reach from
-/// just outside the core outward, like hair or fibre-optic threads. The strands are
-/// still at rest and only stir — bending, lengthening and brightening — as `level`
-/// (0...1) rises, so the orb moves *only* while Jarvis is speaking.
+/// A floating J.A.R.V.I.S.-style energy sphere: a dense weave of fine, curved glowing
+/// filaments wrapping a blazing molten core, with a drifting spark halo and soft HDR
+/// bloom so the whole thing reads as floating light — not solid plastic. It drifts
+/// gently at rest and brightens / pulses with `level` (0...1) while Jarvis speaks.
+/// `accent` tints it (amber when speaking, blue while listening).
 struct OrbView: UIViewRepresentable {
     var level: Float
     var accent: UIColor
@@ -27,30 +29,19 @@ struct OrbView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
-        private let breath = SCNNode()
+        private let drift = SCNNode()        // slow floaty rotation
+        private let filaments = SCNNode()
         private let core = SCNNode()
         private let glow = SCNNode()
-        private let cage = SCNNode()
-        private let coreMaterial = SCNMaterial()
-        private let glowMaterial = SCNMaterial()
+        private let coreMat = SCNMaterial()
+        private let glowMat = SCNMaterial()
+        private let filamentMat = SCNMaterial()
+        private let halo = SCNParticleSystem()
 
-        // One entry per filament strand.
-        private struct Strand {
-            let strand: SCNNode          // the visible thread; pivoted at its inner base
-            let material: SCNMaterial
-            let phase: Float             // de-syncs the per-strand sway
-            let lengthJitter: Float      // slight natural variation in resting length
-        }
-        private var strands: [Strand] = []
+        private let R: Float = 1.32          // sphere radius
+        private let strandCount = 280
+        private let pointsPerStrand = 18
         private var tick: Float = 0
-
-        // Blue-white palette. Strands lerp between these so the cage reads as light, not plastic.
-        private let deepBlue  = UIColor(red: 0.32, green: 0.62, blue: 1.00, alpha: 1)
-        private let paleWhite = UIColor(red: 0.86, green: 0.94, blue: 1.00, alpha: 1)
-
-        private let baseRadius: CGFloat = 0.92   // strands start just outside the core
-        private let strandLen: CGFloat = 1.15
-        private let strandCount = 150
 
         func buildScene() -> SCNScene {
             let scene = SCNScene()
@@ -58,151 +49,149 @@ struct OrbView: UIViewRepresentable {
             let cam = SCNNode()
             cam.camera = SCNCamera()
             cam.position = SCNVector3(0, 0, 6)
+            // HDR bloom — this is what makes the emissive filaments and core glow softly
+            // and "float" rather than look like hard plastic geometry.
+            if let c = cam.camera {
+                c.wantsHDR = true
+                c.bloomIntensity = 1.4
+                c.bloomThreshold = 0.25
+                c.bloomBlurRadius = 14
+                c.wantsExposureAdaptation = false
+            }
             scene.rootNode.addChildNode(cam)
 
-            // Soft, matte-reading luminous core: a constant-lit sphere with a gentle
-            // emission. No specular highlight, so it looks like light rather than plastic.
-            let coreGeo = SCNSphere(radius: 0.82)
+            // Blazing core — bright near-white centre.
+            let coreGeo = SCNSphere(radius: 0.5)
             coreGeo.segmentCount = 96
-            coreMaterial.lightingModel = .constant
-            coreMaterial.diffuse.contents = UIColor.black
-            coreMaterial.emission.contents = paleWhite
-            coreMaterial.emission.intensity = 0.9
-            coreGeo.firstMaterial = coreMaterial
+            coreMat.lightingModel = .constant
+            coreMat.diffuse.contents = UIColor.black
+            coreMat.emission.contents = UIColor(red: 1.0, green: 0.95, blue: 0.85, alpha: 1)
+            coreMat.emission.intensity = 1.6
+            coreGeo.firstMaterial = coreMat
             core.geometry = coreGeo
 
-            // A faint outer glow halo (additive, no hard edge) for atmosphere.
-            let glowGeo = SCNSphere(radius: 1.25)
+            // Soft inner glow shell.
+            let glowGeo = SCNSphere(radius: 0.92)
             glowGeo.segmentCount = 64
-            glowMaterial.lightingModel = .constant
-            glowMaterial.diffuse.contents = UIColor.clear
-            glowMaterial.emission.contents = deepBlue
-            glowMaterial.emission.intensity = 0.22
-            glowMaterial.transparency = 0.30
-            glowMaterial.fresnelExponent = 2.5
-            glowMaterial.blendMode = .add
-            glowMaterial.isDoubleSided = true
-            glowMaterial.writesToDepthBuffer = false
-            glowGeo.firstMaterial = glowMaterial
+            glowMat.lightingModel = .constant
+            glowMat.diffuse.contents = UIColor.clear
+            glowMat.emission.contents = UIColor(red: 1.0, green: 0.6, blue: 0.2, alpha: 1)
+            glowMat.emission.intensity = 0.5
+            glowMat.transparency = 0.5
+            glowMat.blendMode = .add
+            glowMat.isDoubleSided = true
+            glowMat.writesToDepthBuffer = false
+            glowGeo.firstMaterial = glowMat
             glow.geometry = glowGeo
 
-            buildStrands()
+            // Filament weave (one combined line geometry of curved strands on the sphere).
+            filamentMat.lightingModel = .constant
+            filamentMat.diffuse.contents = UIColor.black
+            filamentMat.emission.contents = UIColor(red: 1.0, green: 0.55, blue: 0.15, alpha: 1)
+            filamentMat.emission.intensity = 1.1
+            filamentMat.blendMode = .add
+            filamentMat.writesToDepthBuffer = false
+            let geo = buildFilamentGeometry()
+            geo.firstMaterial = filamentMat
+            filaments.geometry = geo
 
-            breath.addChildNode(core)
-            breath.addChildNode(glow)
-            breath.addChildNode(cage)
-            scene.rootNode.addChildNode(breath)
+            // Drifting spark halo for shimmer + motion.
+            halo.birthRate = 360
+            halo.particleLifeSpan = 2.4
+            halo.particleSize = 0.014
+            halo.particleColor = UIColor(red: 1.0, green: 0.7, blue: 0.3, alpha: 1)
+            halo.emitterShape = SCNSphere(radius: CGFloat(R))
+            halo.birthLocation = .surface
+            halo.particleVelocity = 0.05
+            halo.particleVelocityVariation = 0.06
+            halo.isAffectedByGravity = false
+            halo.blendMode = .additive
+            halo.isLightingEnabled = false
 
-            // The soft core is allowed a slow, gentle breath at rest — that part Antoonie
-            // liked. The strands themselves stay still until `level` drives them.
-            breath.runAction(.repeatForever(.sequence([
-                .scale(to: 1.03, duration: 2.4),
-                .scale(to: 1.0, duration: 2.4)
+            drift.addChildNode(core)
+            drift.addChildNode(glow)
+            drift.addChildNode(filaments)
+            filaments.addParticleSystem(halo)
+            scene.rootNode.addChildNode(drift)
+
+            // Gentle, perpetual float — slow multi-axis drift so it never feels static.
+            drift.runAction(.repeatForever(.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 44)))
+            filaments.runAction(.repeatForever(.rotateBy(x: .pi * 2, y: 0, z: 0, duration: 70)))
+            core.runAction(.repeatForever(.sequence([
+                .scale(to: 1.05, duration: 2.2), .scale(to: 1.0, duration: 2.2)
             ])))
 
             return scene
         }
 
-        /// Distribute strand directions evenly over a sphere (Fibonacci) and build each
-        /// as a thin cylinder pivoted at its inner base so it grows/bends from the core.
-        private func buildStrands() {
+        /// Build curved filament strands woven over the sphere as one `.line` geometry.
+        private func buildFilamentGeometry() -> SCNGeometry {
             let golden = Float.pi * (3 - sqrtf(5))
+            var verts: [SCNVector3] = []
+            var indices: [Int32] = []
             for i in 0..<strandCount {
-                let y = 1 - (Float(i) / Float(strandCount - 1)) * 2      // 1 … -1
+                let y = 1 - (Float(i) / Float(strandCount - 1)) * 2
                 let r = sqrtf(max(0, 1 - y * y))
                 let theta = golden * Float(i)
-                let dir = SCNVector3(r * cosf(theta), y, r * sinf(theta))
-
-                // Holder points its +Y axis along `dir`; it stays fixed.
-                let holder = SCNNode()
-                orient(holder, toDirection: dir)
-
-                let jitter = Float((i % 7)) / 7.0 * 0.35                  // 0 … 0.35
-                let len = strandLen * CGFloat(1 + jitter * 0.4)
-                let geo = SCNCylinder(radius: 0.011, height: len)
-                geo.radialSegmentCount = 6
-                let mat = SCNMaterial()
-                mat.lightingModel = .constant
-                mat.diffuse.contents = UIColor.black
-                let tint = lerp(deepBlue, paleWhite, t: CGFloat(jitter / 0.35))
-                mat.emission.contents = tint
-                mat.emission.intensity = 0.5
-                mat.blendMode = .add
-                mat.writesToDepthBuffer = false
-                geo.firstMaterial = mat
-
-                let strand = SCNNode()
-                strand.geometry = geo
-                // Pivot at the inner end so scale.y lengthens outward and euler bends from base.
-                strand.pivot = SCNMatrix4MakeTranslation(0, Float(-len / 2), 0)
-                strand.position = SCNVector3(0, Float(baseRadius), 0)
-                strand.scale = SCNVector3(1, 0.72, 1)                    // resting: short
-
-                holder.addChildNode(strand)
-                cage.addChildNode(holder)
-                strands.append(Strand(strand: strand, material: mat,
-                                      phase: theta, lengthJitter: jitter))
+                let dir = simd_float3(r * cosf(theta), y, r * sinf(theta))     // start direction
+                let ref: simd_float3 = abs(dir.y) < 0.9 ? simd_float3(0, 1, 0) : simd_float3(1, 0, 0)
+                let tangent = simd_normalize(simd_cross(dir, ref))
+                let binormal = simd_normalize(simd_cross(dir, tangent))
+                let arc = 0.7 + Float(i % 5) * 0.22            // angular length of the strand
+                let curl = 1.4 + Float(i % 7) * 0.5
+                let phase = theta
+                let base = Int32(verts.count)
+                for k in 0..<pointsPerStrand {
+                    let t = Float(k) / Float(pointsPerStrand - 1)
+                    let a = (t - 0.5) * arc
+                    // arc along a great circle through `dir`, plus a 3D curl, kept near the sphere
+                    var p = dir * cosf(a) + tangent * sinf(a)
+                    p += binormal * (sinf(t * Float.pi * curl + phase) * 0.12)
+                    let radial = R * (1 + sinf(t * Float.pi * 2 + phase) * 0.05)
+                    let pp = simd_normalize(p) * radial
+                    verts.append(SCNVector3(pp.x, pp.y, pp.z))
+                    if k < pointsPerStrand - 1 {
+                        indices.append(base + Int32(k))
+                        indices.append(base + Int32(k + 1))
+                    }
+                }
             }
+            let src = SCNGeometrySource(vertices: verts)
+            let elem = SCNGeometryElement(indices: indices, primitiveType: .line)
+            return SCNGeometry(sources: [src], elements: [elem])
         }
 
         func update(level: Float, accent: UIColor) {
-            let l = max(0, min(1, level))
+            let l = CGFloat(max(0, min(1, level)))
             tick += 0.05
-
             SCNTransaction.begin()
-            SCNTransaction.animationDuration = 0.10
+            SCNTransaction.animationDuration = 0.12
 
-            // Core brightens a touch when speaking.
-            coreMaterial.emission.intensity = CGFloat(0.9 + l * 0.7)
-            glowMaterial.emission.intensity = CGFloat(0.22 + l * 0.5)
+            // Tint the weave + halo to the accent; core stays hot/near-white but takes a
+            // little of the accent so blue-listening vs amber-speaking reads through.
+            filamentMat.emission.contents = accent
+            filamentMat.emission.intensity = 0.9 + l * 1.8
+            glowMat.emission.contents = accent
+            glowMat.emission.intensity = 0.35 + l * 0.9
+            halo.particleColor = accent
+            halo.birthRate = CGFloat(280 + l * 700)
 
-            // Strands: bend (sway), lengthen and brighten with the voice level.
-            for s in strands {
-                let p = s.phase
-                let swayX = l * 0.34 * sinf(tick * 2.0 + p)
-                let swayZ = l * 0.34 * cosf(tick * 2.3 + p * 1.3)
-                s.strand.eulerAngles = SCNVector3(swayX, 0, swayZ)
-                let lenScale = 0.72 + l * (0.9 + s.lengthJitter)
-                s.strand.scale = SCNVector3(1, lenScale, 1)
-                s.material.emission.intensity = CGFloat(0.45 + l * 2.1)
-            }
+            let hot = blend(UIColor(red: 1, green: 0.96, blue: 0.9, alpha: 1), accent, 0.25 + l * 0.25)
+            coreMat.emission.contents = hot
+            coreMat.emission.intensity = 1.4 + l * 1.8
+            let s = 1.0 + l * 0.25
+            core.scale = SCNVector3(Float(s), Float(s), Float(s))
             SCNTransaction.commit()
         }
 
-        // MARK: helpers
-
-        /// Rotate `node` so its local +Y axis aligns with `dir` (assumed ~unit length).
-        private func orient(_ node: SCNNode, toDirection dir: SCNVector3) {
-            let up = SCNVector3(0, 1, 0)
-            let d = normalize(dir)
-            let dot = up.x * d.x + up.y * d.y + up.z * d.z
-            if dot > 0.9999 { return }                       // already aligned
-            if dot < -0.9999 {                               // opposite: flip around X
-                node.rotation = SCNVector4(1, 0, 0, Float.pi)
-                return
-            }
-            let axis = normalize(SCNVector3(up.y * d.z - up.z * d.y,
-                                            up.z * d.x - up.x * d.z,
-                                            up.x * d.y - up.y * d.x))
-            node.rotation = SCNVector4(axis.x, axis.y, axis.z, acosf(dot))
-        }
-
-        private func normalize(_ v: SCNVector3) -> SCNVector3 {
-            let m = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z)
-            guard m > 0 else { return SCNVector3(0, 1, 0) }
-            return SCNVector3(v.x / m, v.y / m, v.z / m)
-        }
-
-        private func lerp(_ a: UIColor, _ b: UIColor, t: CGFloat) -> UIColor {
+        private func blend(_ a: UIColor, _ b: UIColor, _ t: CGFloat) -> UIColor {
             var ar: CGFloat = 0, ag: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
             var br: CGFloat = 0, bg: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
             a.getRed(&ar, green: &ag, blue: &ab, alpha: &aa)
             b.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
             let u = max(0, min(1, t))
-            return UIColor(red: ar + (br - ar) * u,
-                           green: ag + (bg - ag) * u,
-                           blue: ab + (bb - ab) * u,
-                           alpha: aa + (ba - aa) * u)
+            return UIColor(red: ar + (br - ar) * u, green: ag + (bg - ag) * u,
+                           blue: ab + (bb - ab) * u, alpha: 1)
         }
     }
 }
