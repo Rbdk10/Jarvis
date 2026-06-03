@@ -12,6 +12,11 @@ platform :ios do
     # XcodeGen is the source of truth for the project — regenerate before building.
     sh("cd .. && xcodegen generate")
 
+    # Pre-ship guardrail: compile + launch the app in a simulator; abort the whole lane
+    # (no upload) if it fails to build or crashes on launch. Keeps a broken build from
+    # reaching TestFlight — applies whether the laptop OR the agent runs `fastlane beta`.
+    sh("cd .. && bash tools/smoke_test.sh")
+
     # Next build number = one above the latest already on TestFlight.
     latest = latest_testflight_build_number(
       api_key: api_key,
