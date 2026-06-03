@@ -37,6 +37,18 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .onTapGesture { vm.tapToListen() }
 
+            // Always-available "stop listening" toggle (top-right). Mute me entirely —
+            // wake word and mic off — so a movie or background telly won't trigger me.
+            if !showInput {
+                VStack {
+                    HStack {
+                        Spacer()
+                        muteButton.padding(.trailing, 16).padding(.top, 10)
+                    }
+                    Spacer()
+                }
+            }
+
             // Live activity log — what Jarvis is doing while thinking. Sits above the
             // orb and quietly disappears once he starts speaking or goes idle.
             VStack {
@@ -230,6 +242,20 @@ struct ContentView: View {
             .overlay(Circle().stroke(Color(uiColor: blueWhite), lineWidth: 2))
             .onTapGesture { vm.interrupt() }
             .accessibilityLabel("Stop Jarvis and talk")
+    }
+
+    /// Always-on listening toggle. Off = fully deaf (no wake word, no mic) so ambient
+    /// audio (a film, the telly) can't trigger Jarvis. Tap to resume.
+    private var muteButton: some View {
+        Button { vm.toggleHandsFree() } label: {
+            Image(systemName: vm.handsFree ? "ear.fill" : "ear.slash.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(vm.handsFree ? Color(uiColor: blueWhite) : .white.opacity(0.45))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.white.opacity(0.08)))
+                .overlay(Circle().stroke((vm.handsFree ? Color(uiColor: blueWhite) : .white).opacity(0.3), lineWidth: 1))
+        }
+        .accessibilityLabel(vm.handsFree ? "Listening is on. Tap to stop listening." : "Listening is off. Tap to resume.")
     }
 
     /// Shown while listening (blue): tap to submit what you've said and send it.
