@@ -47,6 +47,7 @@ final class JarvisViewModel: ObservableObject {
     private var bag = Set<AnyCancellable>()
     private var speechAuthRequested = false
     private var capNoticeLogged = false     // one-time "spend cap reached" notice
+    private var suppressBacklogUntil: Date = .distantPast   // swallow replies right after a drain
 
     // MARK: Voice-activity detection
     private var armed = false               // mic is open, waiting for / capturing speech
@@ -187,10 +188,55 @@ final class JarvisViewModel: ObservableObject {
     func sendTyped(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
+        // Maintenance command — handled on-device, never sent to Jarvis or the fast brain.
+        if Self.isDrainCommand(t) {
+            wake.stop(); armed = false; heardSpeech = false; recorder.stop()
+            log("⌨️ You (typed): \(t)")
+            drainQueue()
+            return
+        }
         wake.stop(); armed = false; heardSpeech = false; recorder.stop()
         voice.stop()                 // cut any in-flight speech
         log("⌨️ You (typed): \(t)")
         route(t)
+    }
+
+    // MARK: Manual drain — type "drain jarvis" in the text box
+
+    /// The maintenance phrase. Typed exactly, it's intercepted locally and never reaches
+    /// Jarvis or the fast brain.
+    private static func isDrainCommand(_ s: String) -> Bool {
+        switch s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "drain jarvis", "drain", "drain the queue": return true
+        default: return false
+        }
+    }
+
+    /// Reset a gummed-up Jarvis from the app — no backend command needed. Cuts any in-flight
+    /// speech/listening, reconnects the socket, and silently swallows any stale replies the
+    /// bridge replays to the fresh connection (reading them is what drains its buffer). Leaves
+    /// you at a clean "Ready" instead of hearing old, out-of-context lines. Purely on-device.
+    func drainQueue() {
+        speechGen &+= 1                 // cancel any in-flight speak / route task
+        let gen = speechGen
+        speakingText = ""
+        voice.stop()
+        wake.stop(); recorder.stop()
+        armed = false; heardSpeech = false; level = 0
+        suppressBacklogUntil = Date().addingTimeInterval(5)   // time-based: self-expires
+        state = .thinking
+        statusText = "Clearing…"
+        log("🧹 Draining stale replies…")
+        socket.disconnect()             // drop the current (possibly zombie) connection
+        socket.connect()                // fresh connect → bridge replays backlog → we eat it
+        Task {
+            try? await Task.sleep(nanoseconds: 5_200_000_000)
+            guard gen == speechGen else { return }   // superseded — leave whatever took over
+            suppressBacklogUntil = .distantPast
+            log("✓ Queue cleared — ready")
+            state = .idle; statusText = "Ready"; level = 0
+            beginIdleListening()
+        }
     }
 
     /// Open the mic and wait for speech. Capture begins automatically when you start
@@ -344,6 +390,12 @@ final class JarvisViewModel: ObservableObject {
     }
 
     private func handleReply(_ text: String) {
+        // Right after a manual drain, silently discard whatever the bridge replays so the
+        // stuck/stale backlog gets consumed without being spoken.
+        if Date() < suppressBacklogUntil {
+            log("🧹 Discarded stale reply during drain")
+            return
+        }
         // Ignore an exact duplicate of what we're already saying (the bridge can echo
         // a reply twice) — this is what caused two overlapping voices.
         if state == .speaking, text == speakingText { return }
