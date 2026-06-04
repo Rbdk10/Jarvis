@@ -451,6 +451,19 @@ final class JarvisViewModel: ObservableObject {
         armListening()             // immediately ready to hear you
     }
 
+    /// Cancel whatever's in flight (thinking / transcribing / awaiting a reply) and
+    /// return to ready. A reply that lands afterwards is ignored (speechGen bumped).
+    func cancel() {
+        speechGen &+= 1
+        speakingText = ""
+        voice.stop()
+        wake.stop(); armed = false; heardSpeech = false; recorder.stop()
+        level = 0
+        state = .idle
+        statusText = "Ready"
+        beginIdleListening()
+    }
+
     private func setError(_ msg: String) {
         armed = false; heardSpeech = false
         state = .error(msg); statusText = msg; level = 0

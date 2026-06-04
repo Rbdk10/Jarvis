@@ -60,7 +60,7 @@ struct ContentView: View {
             if !showInput {
                 VStack {
                     HStack {
-                        if vm.state == .speaking {
+                        if vm.state == .thinking {
                             stopSignButton.padding(.leading, 16).padding(.top, 10)
                         }
                         Spacer()
@@ -412,10 +412,10 @@ struct ContentView: View {
 
     /// Always-on listening toggle. Off = fully deaf (no wake word, no mic) so ambient
     /// audio (a film, the telly) can't trigger Jarvis. Tap to resume.
-    /// Top-left stop sign — a clear, deliberate way to stop Jarvis talking, away from
-    /// the orb. Shown only while speaking.
+    /// Top-left stop sign — cancel whatever Jarvis is working on (thinking / building /
+    /// connecting) and return to ready. Shown only while thinking.
     private var stopSignButton: some View {
-        Button { vm.interrupt() } label: {
+        Button { vm.cancel() } label: {
             Image(systemName: "stop.fill")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(.white)
@@ -423,7 +423,7 @@ struct ContentView: View {
                 .background(Circle().fill(Color(red: 0.85, green: 0.22, blue: 0.20).opacity(0.85)))
                 .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
         }
-        .accessibilityLabel("Stop Jarvis talking")
+        .accessibilityLabel("Stop what Jarvis is doing")
     }
 
     private var muteButton: some View {
