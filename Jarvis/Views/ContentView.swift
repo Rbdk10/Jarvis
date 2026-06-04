@@ -30,13 +30,6 @@ struct ContentView: View {
 
     @State private var showLog = false
 
-    // Swipe-left web preview — eyeball what Jarvis is serving (e.g. a build over an ngrok
-    // tunnel) from the phone. The URL is editable in-app and remembered between launches.
-    @State private var showPreview = false
-    @AppStorage("jarvisPreviewURL") private var committedURL = ""
-    @State private var addressDraft = ""
-    @State private var previewReload = 0
-
     var body: some View {
         ZStack {
             RadialGradient(colors: [Color(white: 0.06), .black],
@@ -135,34 +128,19 @@ struct ContentView: View {
                 }
                 Spacer(minLength: 0)
             }
-
-            // Swipe left → live web preview (right drawer): eyeball a build from your phone.
-            if showPreview {
-                previewPanel
-                    .transition(.move(edge: .trailing))
-            }
         }
         .gesture(
             DragGesture(minimumDistance: 25)
                 .onEnded { v in
                     let dx = v.translation.width, dy = v.translation.height
                     if abs(dx) > abs(dy) {
-                        // Horizontal. Right → activity log (left drawer); left → web preview
-                        // (right drawer). Swiping the opposite way closes whichever is open.
+                        // Horizontal: swipe right → activity log; swipe left → back to middle.
                         guard abs(dx) > 50 else { return }
                         if dx > 0 {
-                            if showPreview { withAnimation { showPreview = false } }
-                            else {
-                                withAnimation { showLog = true; showInput = false; showArtifacts = false }
-                                inputFocused = false
-                            }
+                            withAnimation { showLog = true; showInput = false; showArtifacts = false }
+                            inputFocused = false
                         } else {
-                            if showLog { withAnimation { showLog = false } }
-                            else {
-                                addressDraft = committedURL
-                                withAnimation { showPreview = true; showInput = false; showArtifacts = false }
-                                inputFocused = false
-                            }
+                            withAnimation { showLog = false }
                         }
                         return
                     }
@@ -369,52 +347,6 @@ struct ContentView: View {
         vm.sendTyped(text)
     }
 
-    /// Swipe-left drawer: a live web view of whatever Jarvis is serving (a build preview
-    /// over its ngrok tunnel), so you can check a build from your phone. The address is
-    /// editable and remembered; the refresh button reloads.
-    private var previewPanel: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Button { withAnimation { showPreview = false } } label: {
-                    Image(systemName: "chevron.right").font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-                TextField("https://…ngrok.app", text: $addressDraft)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .tint(Color(uiColor: blueWhite))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    .submitLabel(.go)
-                    .onSubmit {
-                        committedURL = addressDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        previewReload &+= 1
-                    }
-                    .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.08)))
-                Button { previewReload &+= 1 } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color(uiColor: blueWhite))
-                }
-            }
-            .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 10)
-
-            if committedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Spacer()
-                Text("Paste the preview URL above\n(your ngrok tunnel) and tap Go.")
-                    .font(.footnote).foregroundStyle(.white.opacity(0.45))
-                    .multilineTextAlignment(.center)
-                Spacer()
-            } else {
-                WebPreviewView(urlString: committedURL, reloadToken: previewReload)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(white: 0.05))
-        .ignoresSafeArea(edges: .bottom)
-    }
-
     /// Faint heads-up display around the orb: two concentric rings + corner ticks.
     private var hudOverlay: some View {
         GeometryReader { geo in
@@ -594,34 +526,3 @@ struct HTMLView: UIViewRepresentable {
 
 /// Live web view for the swipe-left preview. Loads a URL (defaulting to https:// when no
 /// scheme is given) and reloads when the URL changes or the refresh button bumps the token.
-struct WebPreviewView: UIViewRepresentable {
-    let urlString: String
-    let reloadToken: Int
-
-    func makeUIView(context: Context) -> WKWebView {
-        let v = WKWebView()
-        v.isOpaque = false
-        v.backgroundColor = .black
-        v.scrollView.backgroundColor = .black
-        return v
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        guard let url = Self.url(from: urlString) else { return }
-        let co = context.coordinator
-        if co.lastURL != url || co.lastToken != reloadToken {
-            co.lastURL = url
-            co.lastToken = reloadToken
-            webView.load(URLRequest(url: url))
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator { var lastURL: URL?; var lastToken = Int.min }
-
-    static func url(from raw: String) -> URL? {
-        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return nil }
-        return URL(string: t.contains("://") ? t : "https://\(t)")
-    }
-}
