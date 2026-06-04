@@ -66,7 +66,7 @@ struct OrbView: UIViewRepresentable {
             coreMat.lightingModel = .constant
             coreMat.diffuse.contents = UIColor.black
             coreMat.emission.contents = UIColor(red: 1.0, green: 0.95, blue: 0.85, alpha: 1)
-            coreMat.emission.intensity = 1.6
+            coreMat.emission.intensity = 1.1
             coreGeo.firstMaterial = coreMat
             core.geometry = coreGeo
 
@@ -178,7 +178,7 @@ struct OrbView: UIViewRepresentable {
 
             let hot = blend(UIColor(red: 1, green: 0.96, blue: 0.9, alpha: 1), accent, 0.25 + l * 0.25)
             coreMat.emission.contents = hot
-            coreMat.emission.intensity = 1.4 + l * 1.8
+            coreMat.emission.intensity = 0.95 + l * 1.4
             let s = 1.0 + l * 0.25
             core.scale = SCNVector3(Float(s), Float(s), Float(s))
             SCNTransaction.commit()
