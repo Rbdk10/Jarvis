@@ -30,6 +30,10 @@ struct ContentView: View {
 
     @State private var showLog = false
 
+    // Swipe-left web preview (right drawer) — eyeball what Jarvis serves, e.g. a build over
+    // an ngrok tunnel. Self-contained in WebPreviewPanel; URL + slots persist there.
+    @State private var showPreview = false
+
     var body: some View {
         ZStack {
             RadialGradient(colors: [Color(white: 0.06), .black],
@@ -128,19 +132,33 @@ struct ContentView: View {
                 }
                 Spacer(minLength: 0)
             }
+
+            // Swipe left → web preview (right drawer): eyeball a build from your phone.
+            if showPreview {
+                WebPreviewPanel(isPresented: $showPreview)
+                    .transition(.move(edge: .trailing))
+            }
         }
         .gesture(
             DragGesture(minimumDistance: 25)
                 .onEnded { v in
                     let dx = v.translation.width, dy = v.translation.height
                     if abs(dx) > abs(dy) {
-                        // Horizontal: swipe right → activity log; swipe left → back to middle.
+                        // Horizontal. Right → activity log (left drawer); left → web preview
+                        // (right drawer). Swiping the opposite way closes whichever is open.
                         guard abs(dx) > 50 else { return }
                         if dx > 0 {
-                            withAnimation { showLog = true; showInput = false; showArtifacts = false }
-                            inputFocused = false
+                            if showPreview { withAnimation { showPreview = false } }
+                            else {
+                                withAnimation { showLog = true; showInput = false; showArtifacts = false }
+                                inputFocused = false
+                            }
                         } else {
-                            withAnimation { showLog = false }
+                            if showLog { withAnimation { showLog = false } }
+                            else {
+                                withAnimation { showPreview = true; showInput = false; showArtifacts = false }
+                                inputFocused = false
+                            }
                         }
                         return
                     }

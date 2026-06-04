@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0C0CBA7C3325D83D2A7764AD /* WebPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD4E3A7A0440D286D922DB5 /* WebPreview.swift */; };
 		10EAD8AAAE0557B3C74F7AFA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 38F7EE3D1D2A994CDB90A35E /* Assets.xcassets */; };
 		2066544924A9330F7E9BD1A0 /* CostMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F4052212947FF19E613487 /* CostMeter.swift */; };
 		5386C84075EBD89BA2B6F46A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54BA3851E3D6DFA92BE9FD98 /* ContentView.swift */; };
@@ -34,6 +35,7 @@
 		D22F92E6AC9289680C6D0266 /* ElevenLabsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevenLabsService.swift; sourceTree = "<group>"; };
 		E17E5FA46AF71A144544C14F /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
 		E87A14289F85E511E594A754 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		EAD4E3A7A0440D286D922DB5 /* WebPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPreview.swift; sourceTree = "<group>"; };
 		F2EA89B09E63D9954B6EA5A4 /* Jarvis.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Jarvis.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -91,6 +93,7 @@
 			children = (
 				54BA3851E3D6DFA92BE9FD98 /* ContentView.swift */,
 				5520A77E12AFC71D61EE4B36 /* OrbView.swift */,
+				EAD4E3A7A0440D286D922DB5 /* WebPreview.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -188,6 +191,7 @@
 				F6760E36F0F44A54F090426F /* JarvisSocket.swift in Sources */,
 				E1BDAABEABB5CCBD95523927 /* JarvisViewModel.swift in Sources */,
 				D72D720F534489ED855B3178 /* OrbView.swift in Sources */,
+				0C0CBA7C3325D83D2A7764AD /* WebPreview.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
