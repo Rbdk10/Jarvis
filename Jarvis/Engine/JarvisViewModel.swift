@@ -148,12 +148,13 @@ final class JarvisViewModel: ObservableObject {
     }
 
     /// Screen-tap activation: open the mic immediately with NO greeting — you just start
-    /// talking. During speech a tap interrupts (same as the stop button).
+    /// talking. While speaking, taps are ignored (use the stop button to interrupt) so an
+    /// accidental tap never cuts Jarvis off.
     func tapToListen() {
         switch state {
         case .idle:       wake.stop(); armListening()   // skip the wake word, listen now
         case .listening:  submitListening()             // tap while blue → send what I've said
-        case .speaking:   interrupt()                   // cut me off and take over
+        case .speaking:   break                          // ignore taps while speaking — use the stop button to interrupt
         case .error:      recover()                     // tap the red mic to retry, no restart
         case .thinking:   break                          // busy
         }
