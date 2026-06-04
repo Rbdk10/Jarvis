@@ -106,7 +106,9 @@ struct WebPreviewPanel: View {
     private let accent = Color(red: 0.55, green: 0.80, blue: 1.0)   // blue-white, matches the app
 
     @StateObject private var web = PreviewWebModel()
-    @AppStorage("jarvisPreviewURL") private var committedURL = ""
+    // Defaults to the Charm dev server on the Mac Mini over Tailscale, so the viewer
+    // opens straight to it. (You can still type any other address in.)
+    @AppStorage("jarvisPreviewURL") private var committedURL = "http://100.115.244.72:5173"
     @AppStorage("jarvisPreviewSlots") private var slotsRaw = ""     // saved URLs, newline-joined
     @State private var address = ""
 

@@ -24,6 +24,13 @@
     <string>Jarvis needs the microphone so you can talk to it.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Jarvis listens on-device for the wake word “Jarvis” so it knows when you’re talking to it.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <!-- Allow the in-app web preview to load plain-http dev servers (e.g. a Vite
+             build on the Mac Mini over Tailscale). Fine for this personal dev tool. -->
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UIApplicationSceneManifest</key>
