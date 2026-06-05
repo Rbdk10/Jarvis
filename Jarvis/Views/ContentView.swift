@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import PhotosUI
 
 struct ContentView: View {
     @EnvironmentObject var vm: JarvisViewModel
@@ -23,6 +24,7 @@ struct ContentView: View {
 
     @State private var showInput = false
     @State private var draft = ""
+    @State private var photoItem: PhotosPickerItem?
     @FocusState private var inputFocused: Bool
 
     @State private var showArtifacts = false
@@ -343,7 +345,15 @@ struct ContentView: View {
     /// Swipe-down text entry — type/paste a message; sent to Jarvis like a voice command.
     private var textInputBar: some View {
         HStack(spacing: 10) {
-            TextField("Type or paste for Jarvis…", text: $draft, axis: .vertical)
+            // Attach a photo — sent to Jarvis (with the typed text as a caption, if any).
+            PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color(uiColor: blueWhite).opacity(0.85))
+            }
+            .onChange(of: photoItem) { _, item in handlePickedPhoto(item) }
+
+            TextField("Type, paste, or attach a photo…", text: $draft, axis: .vertical)
                 .lineLimit(1...5)
                 .foregroundStyle(.white)
                 .tint(Color(uiColor: blueWhite))
@@ -380,6 +390,37 @@ struct ContentView: View {
         withAnimation { showInput = false }
         inputFocused = false
         vm.sendTyped(text)
+    }
+
+    /// Load the picked photo, downscale + JPEG-compress it, and send it to Jarvis with the
+    /// typed text (if any) as a caption.
+    private func handlePickedPhoto(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+        let caption = draft
+        Task {
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let b64 = Self.jpegBase64(from: image) else { photoItem = nil; return }
+            await MainActor.run {
+                draft = ""
+                withAnimation { showInput = false }
+                inputFocused = false
+                vm.sendPhoto(base64: b64, caption: caption)
+                photoItem = nil
+            }
+        }
+    }
+
+    /// Downscale (longest side ≤ maxDim) and JPEG-encode → base64, to keep the payload
+    /// small enough to send over the socket.
+    private static func jpegBase64(from image: UIImage, maxDim: CGFloat = 1280,
+                                   quality: CGFloat = 0.6) -> String? {
+        let s = image.size
+        let factor = min(1, maxDim / max(s.width, s.height))
+        let target = CGSize(width: s.width * factor, height: s.height * factor)
+        let renderer = UIGraphicsImageRenderer(size: target)
+        let scaled = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+        return scaled.jpegData(compressionQuality: quality)?.base64EncodedString()
     }
 
     /// Faint heads-up display around the orb: two concentric rings + corner ticks.
