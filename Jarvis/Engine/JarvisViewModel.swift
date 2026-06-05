@@ -34,6 +34,11 @@ final class JarvisViewModel: ObservableObject {
     enum RouteMode { case auto, chatbot, agent }
     @Published var routeMode: RouteMode = .chatbot
 
+    /// Who is actually handling the current turn (working/talking) — drives the live button
+    /// highlight. `.chatbot` or `.agent` while a turn is in flight; nil when idle (then the
+    /// highlight falls back to the locked `routeMode`).
+    @Published var activeHandler: RouteMode?
+
     /// Set by the agent (over the socket) to open the projector on a public URL — e.g. when
     /// you say "show me the page of project X". ContentView observes this and opens the panel.
     @Published var previewRequest: String?
@@ -191,7 +196,7 @@ final class JarvisViewModel: ObservableObject {
     func recover() {
         guard case .error = state else { return }
         wake.stop(); recorder.stop(); voice.stop()
-        armed = false; heardSpeech = false; level = 0
+        armed = false; heardSpeech = false; level = 0; activeHandler = nil
         state = .idle
         statusText = "Ready"
         beginIdleListening()
@@ -260,7 +265,7 @@ final class JarvisViewModel: ObservableObject {
             guard gen == speechGen else { return }   // superseded — leave whatever took over
             suppressBacklogUntil = .distantPast
             log("✓ Queue cleared — ready")
-            state = .idle; statusText = "Ready"; level = 0
+            state = .idle; statusText = "Ready"; level = 0; activeHandler = nil
             beginIdleListening()
         }
     }
@@ -392,6 +397,7 @@ final class JarvisViewModel: ObservableObject {
         switch routeMode {
         case .agent:
             // Locked to the agent — skip the fast brain entirely (also free: no API call).
+            activeHandler = .agent
             log("🟠 → Agent (locked)")
             statusText = "Working…"
             voice.playFiller()
@@ -399,6 +405,7 @@ final class JarvisViewModel: ObservableObject {
 
         case .chatbot:
             // Locked to the chatbot — make the fast brain answer directly.
+            activeHandler = .chatbot
             Task {
                 let say = await fastBrain.answer(text)
                 if fastBrain.isEnabled {
@@ -410,6 +417,7 @@ final class JarvisViewModel: ObservableObject {
                     deliver(say)
                 } else {
                     // No key / over cap / call failed → fall back to the agent so you're never stuck.
+                    activeHandler = .agent
                     log("→ Agent (chatbot unavailable)")
                     statusText = "Working…"
                     voice.playFiller()
@@ -434,9 +442,11 @@ final class JarvisViewModel: ObservableObject {
                 guard gen == speechGen else { return }   // interrupted/superseded while deciding
                 switch decision {
                 case .reply(let say):
+                    activeHandler = .chatbot
                     log("⚡ Fast reply")
                     deliver(say)
                 case .delegate:
+                    activeHandler = .agent
                     log("→ Handing to the agent")
                     statusText = "Working…"
                     voice.playFiller()   // instant acknowledgement → covers the agent round-trip
@@ -478,7 +488,7 @@ final class JarvisViewModel: ObservableObject {
             do {
                 try await voice.speak(text: text)
                 guard gen == speechGen else { return }   // superseded by a newer reply / interrupt
-                state = .idle; statusText = "Ready"; level = 0
+                state = .idle; statusText = "Ready"; level = 0; activeHandler = nil
                 log("✓ Ready")
                 // Conversation mode: after replying, open the mic for a follow-up so you
                 // can answer straight back WITHOUT saying "Jarvis" again. If you don't
@@ -501,7 +511,7 @@ final class JarvisViewModel: ObservableObject {
         speechGen &+= 1            // invalidate the in-flight speak task
         speakingText = ""
         voice.stop()               // cut the audio now
-        level = 0
+        level = 0; activeHandler = nil
         state = .idle
         statusText = "Ready"
         armListening()             // immediately ready to hear you
@@ -514,14 +524,14 @@ final class JarvisViewModel: ObservableObject {
         speakingText = ""
         voice.stop()
         wake.stop(); armed = false; heardSpeech = false; recorder.stop()
-        level = 0
+        level = 0; activeHandler = nil
         state = .idle
         statusText = "Ready"
         beginIdleListening()
     }
 
     private func setError(_ msg: String) {
-        armed = false; heardSpeech = false
+        armed = false; heardSpeech = false; activeHandler = nil
         state = .error(msg); statusText = msg; level = 0
         log("⚠️ Error: \(msg)")
         // Self-heal: a transient error (network/STT/TTS blip) shouldn't brick the app.

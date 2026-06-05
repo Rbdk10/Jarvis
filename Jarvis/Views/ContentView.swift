@@ -429,7 +429,9 @@ struct ContentView: View {
     }
 
     private func modeButton(_ title: String, mode: JarvisViewModel.RouteMode, tint: UIColor) -> some View {
-        let active = vm.routeMode == mode
+        // While a turn is in flight, light up whoever's actually handling it (working/talking);
+        // otherwise fall back to the locked mode.
+        let active = (vm.activeHandler ?? vm.routeMode) == mode
         return Text(title)
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(active ? .white : .white.opacity(0.55))
