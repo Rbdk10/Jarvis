@@ -22,6 +22,9 @@ final class JarvisViewModel: ObservableObject {
     @Published var state: State = .idle
     @Published var level: Float = 0
     @Published var statusText: String = "Connecting…"
+    /// True while the socket is establishing a connection — used to show the stop control
+    /// during "connecting" as well as "thinking".
+    @Published var connecting: Bool = true
     /// When true (default), Jarvis listens automatically. The button toggles this.
     @Published var handsFree: Bool = true
 
@@ -109,12 +112,13 @@ final class JarvisViewModel: ObservableObject {
                 guard let self else { return }
                 switch st {
                 case .connected:
+                    self.connecting = false
                     if self.state == .idle {
                         self.statusText = "Ready"
                         self.beginIdleListening()
                     }
-                case .connecting:   self.statusText = "Connecting…"
-                case .disconnected: self.statusText = "Offline"
+                case .connecting:   self.connecting = true;  self.statusText = "Connecting…"
+                case .disconnected: self.connecting = false; self.statusText = "Offline"
                 }
             }.store(in: &bag)
 
@@ -495,6 +499,19 @@ final class JarvisViewModel: ObservableObject {
         state = .idle
         statusText = "Ready"
         armListening()             // immediately ready to hear you
+    }
+
+    /// Cancel whatever's in flight (thinking / transcribing / awaiting a reply) and
+    /// return to ready. A reply that lands afterwards is ignored (speechGen bumped).
+    func cancel() {
+        speechGen &+= 1
+        speakingText = ""
+        voice.stop()
+        wake.stop(); armed = false; heardSpeech = false; recorder.stop()
+        level = 0
+        state = .idle
+        statusText = "Ready"
+        beginIdleListening()
     }
 
     private func setError(_ msg: String) {
