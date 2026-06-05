@@ -72,6 +72,15 @@ final class FastBrain {
     {"route":"chat","say":"<your spoken reply>"} or {"route":"task","say":""}
     """
 
+    /// Persona for the forced-answer path (when the user locks to "Chatbot").
+    private let answerPrompt = """
+    You are Jarvis, speaking aloud to the user in a dry-witted, unflappable, lightly British \
+    voice (call them "sir" occasionally). The user has chosen to ask YOU directly rather than \
+    your agent backend, so answer it yourself: one to three short, spoken sentences — no \
+    markdown, no lists, no emoji. If it genuinely needs something you can't see (their files, \
+    calendar, messages, the web, or live data), say so briefly and suggest they tap Agent.
+    """
+
     /// Classify (and possibly answer) one utterance. Never throws — any failure
     /// (no key, network, bad response) falls back to `.delegate` so the agent still gets it.
     func decide(_ userText: String) async -> Decision {
@@ -93,11 +102,12 @@ final class FastBrain {
             "messages": messages
         ]
 
-        guard let decoded = await call(body: body) else {
+        guard let text = await send(body) else {
             // Couldn't reach/parse the fast brain — let the agent handle it. Don't poison
             // history with a turn that never resolved.
             return .delegate
         }
+        let decoded = Self.parseDecision(from: text)
 
         // Record this turn so follow-ups have context.
         history.append(["role": "user", "content": userText])
@@ -107,9 +117,41 @@ final class FastBrain {
         case .delegate:
             history.append(["role": "assistant", "content": "(handed that to the agent)"])
         }
-        if history.count > maxHistory { history.removeFirst(history.count - maxHistory) }
+        trimHistory()
 
         return decoded
+    }
+
+    /// Force a direct spoken answer, ignoring routing — used when the user locks the top
+    /// toggle to "Chatbot". Returns nil if the brain can't (no key / over cap / call failed),
+    /// so the caller can fall back to the agent.
+    func answer(_ userText: String) async -> String? {
+        guard isEnabled else { return nil }
+
+        var messages = history
+        messages.append(["role": "user", "content": userText])
+
+        let body: [String: Any] = [
+            "model": AppConfig.fastBrainModel,
+            "max_tokens": 300,
+            "temperature": 0.6,
+            "system": [["type": "text", "text": answerPrompt,
+                        "cache_control": ["type": "ephemeral"]]],
+            "messages": messages
+        ]
+
+        guard let text = await send(body) else { return nil }
+        let say = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !say.isEmpty else { return nil }
+
+        history.append(["role": "user", "content": userText])
+        history.append(["role": "assistant", "content": say])
+        trimHistory()
+        return say
+    }
+
+    private func trimHistory() {
+        if history.count > maxHistory { history.removeFirst(history.count - maxHistory) }
     }
 
     /// Drop the conversation memory (e.g. on a long gap) — currently unused but cheap to keep.
@@ -117,7 +159,7 @@ final class FastBrain {
 
     // MARK: - Anthropic call
 
-    private func call(body: [String: Any]) async -> Decision? {
+    private func send(_ body: [String: Any]) async -> String? {
         guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
@@ -132,10 +174,9 @@ final class FastBrain {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        // Meter the spend from this call's usage block, then read the reply.
+        // Meter the spend from this call's usage block, then return the reply text.
         recordUsage(obj["usage"] as? [String: Any])
-        guard let text = Self.firstText(in: obj) else { return nil }
-        return Self.parseDecision(from: text)
+        return Self.firstText(in: obj)
     }
 
     /// Add this response's token usage to the cost meter (Anthropic returns a top-level

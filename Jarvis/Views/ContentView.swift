@@ -70,6 +70,14 @@ struct ContentView: View {
                 }
             }
 
+            // Two-button routing override at the very top: lock to Chatbot or Agent.
+            if !showInput {
+                VStack {
+                    modeToggle.padding(.top, 10)
+                    Spacer()
+                }
+            }
+
             // Live activity log — what Jarvis is doing while thinking. Sits above the
             // orb and quietly disappears once he starts speaking or goes idle.
             VStack {
@@ -79,7 +87,7 @@ struct ContentView: View {
                 }
                 Spacer()
             }
-            .padding(.top, 8)
+            .padding(.top, 56)
             .animation(.easeInOut(duration: 0.25), value: isThinking)
 
             VStack(spacing: 0) {
@@ -397,6 +405,30 @@ struct ContentView: View {
             path.addLine(to: CGPoint(x: p.x, y: p.y + sy * len))
         }
         .stroke(Color(uiColor: orbAccent).opacity(0.22), lineWidth: 1.5)
+    }
+
+    /// Two-button routing override. Lock the conversation to the Chatbot (instant, on-device)
+    /// or the Agent (the mini). Tap the lit one again to return to Auto (smart routing).
+    private var modeToggle: some View {
+        HStack(spacing: 4) {
+            modeButton("Chatbot", mode: .chatbot, tint: orbBlue)
+            modeButton("Agent", mode: .agent, tint: orbAmber)
+        }
+        .padding(3)
+        .background(Capsule().fill(.black.opacity(0.35)))
+        .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private func modeButton(_ title: String, mode: JarvisViewModel.RouteMode, tint: UIColor) -> some View {
+        let active = vm.routeMode == mode
+        return Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(active ? .white : .white.opacity(0.55))
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .background(Capsule().fill(active ? Color(uiColor: tint).opacity(0.9) : Color.clear))
+            .contentShape(Capsule())
+            .onTapGesture { vm.setMode(active ? .auto : mode) }
+            .accessibilityLabel("\(title)\(active ? ", selected. Tap to return to auto" : "")")
     }
 
     /// Shown only while Jarvis is speaking — tap to interrupt and start talking.
