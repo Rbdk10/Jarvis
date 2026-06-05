@@ -232,6 +232,19 @@ final class JarvisViewModel: ObservableObject {
         route(t)
     }
 
+    /// Send a photo (base64 JPEG) to Jarvis. Always goes to the agent — it needs the
+    /// actual file and vision, not the on-device chat brain.
+    func sendPhoto(base64: String, caption: String) {
+        guard !base64.isEmpty else { return }
+        wake.stop(); armed = false; heardSpeech = false; recorder.stop()
+        voice.stop(); speechGen &+= 1
+        state = .thinking
+        statusText = "Thinking…"
+        let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        log("📷 You sent a photo\(cap.isEmpty ? "" : ": \(cap)")")
+        socket.sendImage(base64: cap.isEmpty ? base64 : base64, caption: cap.isEmpty ? nil : cap)
+    }
+
     // MARK: Manual drain — type "drain jarvis" in the text box
 
     /// The maintenance phrase. Typed exactly, it's intercepted locally and never reaches

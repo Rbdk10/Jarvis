@@ -61,6 +61,18 @@ final class JarvisSocket: NSObject, ObservableObject {
         }
     }
 
+    /// Send a photo to Jarvis. The bridge decodes `base64` (a JPEG), saves it, and hands
+    /// the file path (plus the optional caption) to the agent.
+    func sendImage(base64: String, caption: String?) {
+        var payload: [String: Any] = ["type": "image_message", "data": base64]
+        if let caption, !caption.isEmpty { payload["caption"] = caption }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let str = String(data: data, encoding: .utf8) else { return }
+        task?.send(.string(str)) { [weak self] err in
+            if let err { Task { @MainActor in self?.onError?(err.localizedDescription) } }
+        }
+    }
+
     private func receive() {
         task?.receive { [weak self] result in
             guard let self else { return }
