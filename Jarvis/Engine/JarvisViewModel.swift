@@ -30,8 +30,13 @@ final class JarvisViewModel: ObservableObject {
 
     /// Manual routing override — the two top buttons. `.auto` is the normal smart routing;
     /// `.chatbot` forces the fast brain to answer; `.agent` sends everything to the agent.
+    /// Starts on `.chatbot` so a fresh conversation talks to the instant on-device brain.
     enum RouteMode { case auto, chatbot, agent }
-    @Published var routeMode: RouteMode = .auto
+    @Published var routeMode: RouteMode = .chatbot
+
+    /// Set by the agent (over the socket) to open the projector on a public URL — e.g. when
+    /// you say "show me the page of project X". ContentView observes this and opens the panel.
+    @Published var previewRequest: String?
 
     func setMode(_ m: RouteMode) {
         routeMode = m
@@ -89,6 +94,7 @@ final class JarvisViewModel: ObservableObject {
         socket.onReply = { [weak self] text in self?.handleReply(text) }
         socket.onError = { [weak self] msg in self?.setError(msg) }
         socket.onArtifact = { [weak self] art in self?.artifacts.append(art) }
+        socket.onOpenURL = { [weak self] url in self?.previewRequest = url }
         socket.onStatus = { [weak self] label in
             // Live "what I'm doing" feed — only meaningful while thinking.
             if self?.state == .thinking { self?.statusText = label }

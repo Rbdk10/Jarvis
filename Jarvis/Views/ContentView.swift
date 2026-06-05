@@ -30,9 +30,10 @@ struct ContentView: View {
 
     @State private var showLog = false
 
-    // Swipe-left web preview (right drawer) — eyeball what Jarvis serves, e.g. a build over
-    // an ngrok tunnel. Self-contained in WebPreviewPanel; URL + slots persist there.
+    // Swipe-left web preview (right drawer) — a small browser for public sites. The agent
+    // can also push a URL to open it (see vm.previewRequest below).
     @State private var showPreview = false
+    @AppStorage("jarvisPreviewURL") private var previewURL = ""
 
     var body: some View {
         ZStack {
@@ -190,6 +191,14 @@ struct ContentView: View {
         )
         .sheet(item: $expandedArtifact) { art in
             ArtifactDetailView(artifact: art)
+        }
+        // Agent asked to "show me the page of …" → open the projector on that URL.
+        .onChange(of: vm.previewRequest) { _, req in
+            guard let req, !req.isEmpty else { return }
+            previewURL = req
+            withAnimation { showPreview = true; showLog = false; showInput = false; showArtifacts = false }
+            inputFocused = false
+            vm.previewRequest = nil
         }
     }
 

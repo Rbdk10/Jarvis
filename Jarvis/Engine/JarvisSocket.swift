@@ -22,6 +22,8 @@ final class JarvisSocket: NSObject, ObservableObject {
     var onStatus: ((String) -> Void)?
     var onError: ((String) -> Void)?
     var onArtifact: ((JarvisArtifact) -> Void)?
+    /// Agent asks the app to open the projector on a URL: {"type":"open_url","url":"https://…"}
+    var onOpenURL: ((String) -> Void)?
 
     private let session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
@@ -86,6 +88,7 @@ final class JarvisSocket: NSObject, ObservableObject {
         case "reply":  if let text = obj["text"] as? String { onReply?(text) }
         case "status": if let label = obj["label"] as? String { onStatus?(label) }
         case "error":  onError?(obj["message"] as? String ?? "error")
+        case "open_url": if let url = obj["url"] as? String { onOpenURL?(url) }
         case "artifact":
             onArtifact?(JarvisArtifact(
                 kind: (obj["artifact_type"] as? String) ?? (obj["kind"] as? String) ?? "text",

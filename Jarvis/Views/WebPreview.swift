@@ -106,11 +106,15 @@ struct WebPreviewPanel: View {
     private let accent = Color(red: 0.55, green: 0.80, blue: 1.0)   // blue-white, matches the app
 
     @StateObject private var web = PreviewWebModel()
-    // Defaults to the Charm dev server on the Mac Mini over Tailscale, so the viewer
-    // opens straight to it. (You can still type any other address in.)
-    @AppStorage("jarvisPreviewURL") private var committedURL = "http://100.115.244.72:5173"
+    // A small browser for public sites. Empty by default — type an address, or let the
+    // agent push one ("show me the page of …", which sets this via ContentView).
+    @AppStorage("jarvisPreviewURL") private var committedURL = ""
     @AppStorage("jarvisPreviewSlots") private var slotsRaw = ""     // saved URLs, newline-joined
     @State private var address = ""
+
+    // The old Tailscale dev-server URL that used to be the default — clear it on existing
+    // installs so the projector starts clean for public sites.
+    private let retiredDefault = "http://100.115.244.72:5173"
 
     private var slots: [String] { slotsRaw.split(separator: "\n").map(String.init) }
 
@@ -134,8 +138,15 @@ struct WebPreviewPanel: View {
         .background(Color(white: 0.05))
         .ignoresSafeArea(edges: .bottom)
         .onAppear {
+            if committedURL == retiredDefault { committedURL = "" }   // migrate off the old dev URL
             address = committedURL
             if web.webView.url == nil, !committedURL.isEmpty { web.load(committedURL) }
+        }
+        // The agent (or a saved chip) can change the URL while we're open → load it.
+        .onChange(of: committedURL) { _, new in
+            guard new != retiredDefault, !new.isEmpty else { return }
+            address = new
+            web.load(new)
         }
     }
 
@@ -145,7 +156,7 @@ struct WebPreviewPanel: View {
             icon("chevron.right") { withAnimation { isPresented = false } }
             icon("chevron.backward", on: web.canGoBack) { web.goBack() }
             icon("chevron.forward", on: web.canGoForward) { web.goForward() }
-            TextField("https://…ngrok.app", text: $address)
+            TextField("https://… (public site)", text: $address)
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(.white)
                 .tint(accent)
@@ -203,7 +214,7 @@ struct WebPreviewPanel: View {
     private var placeholder: some View {
         VStack(spacing: 8) {
             Image(systemName: "globe").font(.system(size: 34)).foregroundStyle(.white.opacity(0.22))
-            Text("Paste a preview URL above and tap Go.\nYour ngrok tunnel — or any site.")
+            Text("Type a site address above and tap Go,\nor ask Jarvis to show you a page.")
                 .font(.footnote).foregroundStyle(.white.opacity(0.45))
                 .multilineTextAlignment(.center)
         }
