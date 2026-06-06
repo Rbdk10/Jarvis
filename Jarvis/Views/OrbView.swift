@@ -1,71 +1,192 @@
 import SwiftUI
+import SceneKit
+import simd
 
-/// The J.A.R.V.I.S. core: the arc-reactor image sits still in the centre while the "orb" —
-/// animated HUD rings and orbiting glints — drifts around it. Everything brightens, and the
-/// core pulses, with `level` (0...1) while Jarvis speaks; `accent` tints the orb (blue while
-/// listening, amber while speaking). Same `OrbView(level:accent:)` interface as before.
-struct OrbView: View {
+/// A floating J.A.R.V.I.S.-style energy sphere: a dense weave of fine, curved glowing
+/// filaments wrapping a blazing molten core, with a drifting spark halo and soft HDR
+/// bloom so the whole thing reads as floating light — not solid plastic. It drifts
+/// gently at rest and brightens / pulses with `level` (0...1) while Jarvis speaks.
+/// `accent` tints it (amber when speaking, blue while listening).
+struct OrbView: UIViewRepresentable {
     var level: Float
     var accent: UIColor
-    private var l: CGFloat { CGFloat(max(0, min(1, level))) }
 
-    var body: some View {
-        // TimelineView(.animation) drives smooth, continuous motion off the clock — so the
-        // orb keeps drifting independently of the voice-reactive (level) changes.
-        TimelineView(.animation) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            GeometryReader { geo in
-                content(t: t, s: min(geo.size.width, geo.size.height))
-                    .frame(width: geo.size.width, height: geo.size.height)
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView()
+        view.backgroundColor = .clear
+        view.scene = context.coordinator.buildScene()
+        view.allowsCameraControl = false
+        view.isUserInteractionEnabled = false
+        view.antialiasingMode = .multisampling4X
+        view.rendersContinuously = true
+        return view
+    }
+
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        context.coordinator.update(level: level, accent: accent)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        private let drift = SCNNode()        // slow floaty rotation
+        private let filaments = SCNNode()
+        private let core = SCNNode()
+        private let glow = SCNNode()
+        private let coreMat = SCNMaterial()
+        private let glowMat = SCNMaterial()
+        private let filamentMat = SCNMaterial()
+        private let halo = SCNParticleSystem()
+
+        private let R: Float = 1.32          // sphere radius
+        private let strandCount = 280
+        private let pointsPerStrand = 18
+        private var tick: Float = 0
+
+        func buildScene() -> SCNScene {
+            let scene = SCNScene()
+
+            let cam = SCNNode()
+            cam.camera = SCNCamera()
+            cam.position = SCNVector3(0, 0, 6)
+            // HDR bloom — this is what makes the emissive filaments and core glow softly
+            // and "float" rather than look like hard plastic geometry.
+            if let c = cam.camera {
+                c.wantsHDR = true
+                c.bloomIntensity = 1.4
+                c.bloomThreshold = 0.25
+                c.bloomBlurRadius = 14
+                c.wantsExposureAdaptation = false
             }
+            scene.rootNode.addChildNode(cam)
+
+            // Core emblem: the J.A.R.V.I.S. arc-reactor image, sitting upright at the
+            // centre for the filaments to revolve around. Additive blend makes its black
+            // backdrop fall away so only the glowing reactor shows.
+            let coreGeo = SCNPlane(width: 1.2, height: 1.2)
+            coreMat.lightingModel = .constant
+            coreMat.diffuse.contents = UIColor.black
+            coreMat.emission.contents = UIImage(named: "JarvisCore")
+            coreMat.emission.intensity = 1.0
+            coreMat.blendMode = .add
+            coreMat.isDoubleSided = true
+            coreMat.writesToDepthBuffer = false
+            coreGeo.firstMaterial = coreMat
+            core.geometry = coreGeo
+
+            // Soft inner glow shell.
+            let glowGeo = SCNSphere(radius: 0.92)
+            glowGeo.segmentCount = 64
+            glowMat.lightingModel = .constant
+            glowMat.diffuse.contents = UIColor.clear
+            glowMat.emission.contents = UIColor(red: 1.0, green: 0.6, blue: 0.2, alpha: 1)
+            glowMat.emission.intensity = 0.5
+            glowMat.transparency = 0.5
+            glowMat.blendMode = .add
+            glowMat.isDoubleSided = true
+            glowMat.writesToDepthBuffer = false
+            glowGeo.firstMaterial = glowMat
+            glow.geometry = glowGeo
+
+            // Filament weave (one combined line geometry of curved strands on the sphere).
+            filamentMat.lightingModel = .constant
+            filamentMat.diffuse.contents = UIColor.black
+            filamentMat.emission.contents = UIColor(red: 1.0, green: 0.55, blue: 0.15, alpha: 1)
+            filamentMat.emission.intensity = 1.1
+            filamentMat.blendMode = .add
+            filamentMat.writesToDepthBuffer = false
+            let geo = buildFilamentGeometry()
+            geo.firstMaterial = filamentMat
+            filaments.geometry = geo
+
+            // Drifting spark halo for shimmer + motion.
+            halo.birthRate = 360
+            halo.particleLifeSpan = 2.4
+            halo.particleSize = 0.014
+            halo.particleColor = UIColor(red: 1.0, green: 0.7, blue: 0.3, alpha: 1)
+            halo.emitterShape = SCNSphere(radius: CGFloat(R))
+            halo.birthLocation = .surface
+            halo.particleVelocity = 0.05
+            halo.particleVelocityVariation = 0.06
+            halo.isAffectedByGravity = false
+            halo.blendMode = .additive
+            halo.isLightingEnabled = false
+
+            drift.addChildNode(glow)
+            drift.addChildNode(filaments)
+            filaments.addParticleSystem(halo)
+            scene.rootNode.addChildNode(drift)
+            // Core sits OUTSIDE drift so the arc-reactor stays upright while the orb revolves.
+            scene.rootNode.addChildNode(core)
+
+            // Gentle, perpetual float — slow multi-axis drift so it never feels static.
+            drift.runAction(.repeatForever(.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 44)))
+            filaments.runAction(.repeatForever(.rotateBy(x: .pi * 2, y: 0, z: 0, duration: 70)))
+            core.runAction(.repeatForever(.sequence([
+                .scale(to: 1.05, duration: 2.2), .scale(to: 1.0, duration: 2.2)
+            ])))
+
+            return scene
         }
-    }
 
-    private func content(t: TimeInterval, s: CGFloat) -> some View {
-        let coreSide = s * 0.56
-        let a = Color(uiColor: accent)
-        return ZStack {
-            // Soft accent bloom behind the core — swells with the voice level.
-            Circle().fill(a)
-                .frame(width: coreSide * 0.8, height: coreSide * 0.8)
-                .blur(radius: 64)
-                .opacity(0.10 + Double(l) * 0.5)
-
-            // The orb: rings + glints drifting around the core (opposite directions).
-            ring(s * 0.36, dash: [3, 11], width: 1.3, deg: t * 16, color: a)
-            ring(s * 0.42, dash: [1, 18], width: 1.0, deg: -t * 24, color: a)
-            glints(radius: s * 0.39, count: 5, deg: t * 12, color: a)
-
-            // The static core image in the centre. `.screen` lets its black backdrop fall
-            // away so it reads as floating light rather than a hard square.
-            Image("JarvisCore")
-                .resizable().scaledToFit()
-                .frame(width: coreSide, height: coreSide)
-                .blendMode(.screen)
-                .brightness(Double(l) * 0.16)
-                .scaleEffect(1.0 + l * 0.05)
-                .shadow(color: a.opacity(0.5 * Double(l)), radius: 22)
-        }
-    }
-
-    private func ring(_ radius: CGFloat, dash: [CGFloat], width: CGFloat, deg: Double, color: Color) -> some View {
-        Circle()
-            .stroke(color.opacity(0.22 + Double(l) * 0.5),
-                    style: StrokeStyle(lineWidth: width, dash: dash))
-            .frame(width: radius * 2, height: radius * 2)
-            .rotationEffect(.degrees(deg))
-    }
-
-    private func glints(radius: CGFloat, count: Int, deg: Double, color: Color) -> some View {
-        ZStack {
-            ForEach(0..<count, id: \.self) { i in
-                Circle().fill(color)
-                    .frame(width: 3.5, height: 3.5)
-                    .offset(y: -radius)
-                    .rotationEffect(.degrees(Double(i) / Double(count) * 360))
+        /// Build curved filament strands woven over the sphere as one `.line` geometry.
+        private func buildFilamentGeometry() -> SCNGeometry {
+            let golden = Float.pi * (3 - sqrtf(5))
+            var verts: [SCNVector3] = []
+            var indices: [Int32] = []
+            for i in 0..<strandCount {
+                let y = 1 - (Float(i) / Float(strandCount - 1)) * 2
+                let r = sqrtf(max(0, 1 - y * y))
+                let theta = golden * Float(i)
+                let dir = simd_float3(r * cosf(theta), y, r * sinf(theta))     // start direction
+                let ref: simd_float3 = abs(dir.y) < 0.9 ? simd_float3(0, 1, 0) : simd_float3(1, 0, 0)
+                let tangent = simd_normalize(simd_cross(dir, ref))
+                let binormal = simd_normalize(simd_cross(dir, tangent))
+                let arc = 0.7 + Float(i % 5) * 0.22            // angular length of the strand
+                let curl = 1.4 + Float(i % 7) * 0.5
+                let phase = theta
+                let base = Int32(verts.count)
+                for k in 0..<pointsPerStrand {
+                    let t = Float(k) / Float(pointsPerStrand - 1)
+                    let a = (t - 0.5) * arc
+                    // arc along a great circle through `dir`, plus a 3D curl, kept near the sphere
+                    var p = dir * cosf(a) + tangent * sinf(a)
+                    p += binormal * (sinf(t * Float.pi * curl + phase) * 0.12)
+                    let radial = R * (1 + sinf(t * Float.pi * 2 + phase) * 0.05)
+                    let pp = simd_normalize(p) * radial
+                    verts.append(SCNVector3(pp.x, pp.y, pp.z))
+                    if k < pointsPerStrand - 1 {
+                        indices.append(base + Int32(k))
+                        indices.append(base + Int32(k + 1))
+                    }
+                }
             }
+            let src = SCNGeometrySource(vertices: verts)
+            let elem = SCNGeometryElement(indices: indices, primitiveType: .line)
+            return SCNGeometry(sources: [src], elements: [elem])
         }
-        .rotationEffect(.degrees(deg))
-        .opacity(0.45 + Double(l) * 0.5)
+
+        func update(level: Float, accent: UIColor) {
+            let l = CGFloat(max(0, min(1, level)))
+            tick += 0.05
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.12
+
+            // Tint the weave + halo to the accent; core stays hot/near-white but takes a
+            // little of the accent so blue-listening vs amber-speaking reads through.
+            filamentMat.emission.contents = accent
+            filamentMat.emission.intensity = 0.9 + l * 1.8
+            glowMat.emission.contents = accent
+            glowMat.emission.intensity = 0.35 + l * 0.9
+            halo.particleColor = accent
+            halo.birthRate = CGFloat(280 + l * 700)
+
+            // The arc-reactor image keeps its own look; just brighten + swell it with the voice.
+            coreMat.emission.intensity = 0.9 + l * 1.0
+            let s = 1.0 + l * 0.18
+            core.scale = SCNVector3(Float(s), Float(s), Float(s))
+            SCNTransaction.commit()
+        }
+
     }
 }
