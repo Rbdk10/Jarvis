@@ -15,7 +15,7 @@
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>32</string>
+    <string>36</string>
     <key>CFBundleDisplayName</key>
     <string>Jarvis</string>
     <key>ITSAppUsesNonExemptEncryption</key>
