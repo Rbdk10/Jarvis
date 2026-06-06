@@ -12,12 +12,13 @@ struct ContentView: View {
         return blueWhite
     }
 
-    // The energy orb: amber by default (the J.A.R.V.I.S. look), blue while *you* talk.
+    // The energy orb: blue in every state (resting, listening, thinking) and amber
+    // *only* while Jarvis is speaking.
     private let orbAmber = UIColor(red: 1.0, green: 0.55, blue: 0.15, alpha: 1)
     private let orbBlue  = UIColor(red: 0.30, green: 0.66, blue: 1.0, alpha: 1)
     private var orbAccent: UIColor {
         if case .error = vm.state { return UIColor(red: 1.0, green: 0.30, blue: 0.30, alpha: 1) }
-        return vm.state == .listening ? orbBlue : orbAmber
+        return vm.state == .speaking ? orbAmber : orbBlue
     }
 
     private var isThinking: Bool { vm.state == .thinking }
