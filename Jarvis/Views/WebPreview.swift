@@ -27,7 +27,9 @@ final class PreviewWebModel: NSObject, ObservableObject, WKNavigationDelegate {
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.scrollView.backgroundColor = .black
-        webView.allowsBackForwardNavigationGestures = true
+        // Off, so a horizontal swipe doesn't get eaten by web back/forward — we use it to
+        // close the panel instead (web history is still reachable via the nav-bar buttons).
+        webView.allowsBackForwardNavigationGestures = false
         let rc = UIRefreshControl()
         rc.addTarget(self, action: #selector(pullRefresh), for: .valueChanged)
         webView.scrollView.refreshControl = rc
@@ -132,6 +134,22 @@ struct WebPreviewPanel: View {
                         .padding(14)
                         .background(.ultraThinMaterial, in: Circle())
                 }
+            }
+            .overlay(alignment: .leading) {
+                // The web view eats normal drags, so grab a thin strip at the left edge for a
+                // swipe-back-to-close (iOS-style). Swipe right from the edge → close the panel.
+                Color.clear
+                    .frame(width: 28)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 15)
+                            .onEnded { v in
+                                if v.translation.width > 45,
+                                   abs(v.translation.width) > abs(v.translation.height) {
+                                    withAnimation { isPresented = false }
+                                }
+                            }
+                    )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
