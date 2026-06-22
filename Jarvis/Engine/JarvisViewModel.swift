@@ -30,9 +30,10 @@ final class JarvisViewModel: ObservableObject {
 
     /// Manual routing override — the two top buttons. `.auto` is the normal smart routing;
     /// `.chatbot` forces the fast brain to answer; `.agent` sends everything to the agent.
-    /// Starts on `.chatbot` so a fresh conversation talks to the instant on-device brain.
+    /// Starts on `.agent`: the agent is the point of the app, so a fresh conversation talks
+    /// straight to the bridge (the on-device chatbot is opt-in via the top toggle).
     enum RouteMode { case auto, chatbot, agent }
-    @Published var routeMode: RouteMode = .chatbot
+    @Published var routeMode: RouteMode = .agent
 
     /// Who is actually handling the current turn (working/talking) — drives the live button
     /// highlight. `.chatbot` or `.agent` while a turn is in flight; nil when idle (then the
@@ -94,6 +95,12 @@ final class JarvisViewModel: ObservableObject {
     private var speechGen = 0               // bumped per reply / interrupt; stale tasks no-op
     private var speakingText = ""           // currently-spoken text, for duplicate suppression
 
+    // Agent reply watchdog — if a turn handed to the agent produces no reply or progress
+    // within the window, surface an error instead of hanging in "Working…" forever. Any
+    // inbound activity (status/reply) cancels or re-arms it.
+    private var agentWatchdog: Task<Void, Never>?
+    private let agentReplyTimeout: UInt64 = 45_000_000_000   // 45s of silence → give up
+
     init() {
         wake.onWake = { [weak self] in self?.onWake() }
         socket.onReply = { [weak self] text in self?.handleReply(text) }
@@ -101,9 +108,12 @@ final class JarvisViewModel: ObservableObject {
         socket.onArtifact = { [weak self] art in self?.artifacts.append(art) }
         socket.onOpenURL = { [weak self] url in self?.previewRequest = url }
         socket.onStatus = { [weak self] label in
+            guard let self else { return }
             // Live "what I'm doing" feed — only meaningful while thinking.
-            if self?.state == .thinking { self?.statusText = label }
-            self?.log(label)
+            if self.state == .thinking { self.statusText = label }
+            self.log(label)
+            // Progress from the agent means it's alive and working — push the deadline back.
+            if self.activeHandler == .agent { self.armAgentWatchdog() }
         }
 
         // Mic meter drives voice-activity detection. It never drives the orb — the
@@ -121,19 +131,26 @@ final class JarvisViewModel: ObservableObject {
         socket.$status
             .sink { [weak self] st in
                 guard let self else { return }
+                // The socket only gates the AGENT. The mic, wake word and on-device chatbot
+                // work without it, so listening is started in init regardless — we never block
+                // the whole app on the bridge being reachable. Here we only reflect agent
+                // connectivity in the idle status line.
                 switch st {
                 case .connected:
                     self.connecting = false
-                    if self.state == .idle {
-                        self.statusText = "Ready"
-                        self.beginIdleListening()
-                    }
-                case .connecting:   self.connecting = true;  self.statusText = "Connecting…"
-                case .disconnected: self.connecting = false; self.statusText = "Offline"
+                    if self.state == .idle { self.beginIdleListening() }
+                case .connecting:
+                    self.connecting = true
+                case .disconnected:
+                    self.connecting = false
                 }
             }.store(in: &bag)
 
         socket.connect()
+        // Start listening immediately — independent of the agent bridge. If the bridge is down
+        // you can still talk and use the on-device chatbot; agent turns surface a clear error
+        // (see the reply watchdog) instead of the app hanging on "Connecting…".
+        beginIdleListening()
 
         // Pre-render the instant-acknowledgement clips in the background so the very
         // first "thinking" moment already has them cached (no dead air, no network wait).
@@ -195,6 +212,7 @@ final class JarvisViewModel: ObservableObject {
     /// after any error (see `setError`).
     func recover() {
         guard case .error = state else { return }
+        cancelAgentWatchdog()
         wake.stop(); recorder.stop(); voice.stop()
         armed = false; heardSpeech = false; level = 0; activeHandler = nil
         state = .idle
@@ -239,10 +257,12 @@ final class JarvisViewModel: ObservableObject {
         wake.stop(); armed = false; heardSpeech = false; recorder.stop()
         voice.stop(); speechGen &+= 1
         state = .thinking
-        statusText = "Thinking…"
+        statusText = "Working…"
+        activeHandler = .agent   // photos always go to the agent
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         log("📷 You sent a photo\(cap.isEmpty ? "" : ": \(cap)")")
         socket.sendImage(base64: cap.isEmpty ? base64 : base64, caption: cap.isEmpty ? nil : cap)
+        armAgentWatchdog()
     }
 
     // MARK: Manual drain — type "drain jarvis" in the text box
@@ -261,6 +281,7 @@ final class JarvisViewModel: ObservableObject {
     /// bridge replays to the fresh connection (reading them is what drains its buffer). Leaves
     /// you at a clean "Ready" instead of hearing old, out-of-context lines. Purely on-device.
     func drainQueue() {
+        cancelAgentWatchdog()
         speechGen &+= 1                 // cancel any in-flight speak / route task
         let gen = speechGen
         speakingText = ""
@@ -393,6 +414,36 @@ final class JarvisViewModel: ObservableObject {
         }
     }
 
+    // MARK: Agent reply watchdog
+
+    /// (Re)start the no-reply timer for the current agent turn. If the agent produces neither
+    /// a reply nor a progress update within `agentReplyTimeout`, drop out of "Working…" with a
+    /// clear error so a down/unreachable bridge never leaves the app frozen.
+    private func armAgentWatchdog() {
+        let gen = speechGen
+        agentWatchdog?.cancel()
+        agentWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: self?.agentReplyTimeout ?? 45_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            guard gen == self.speechGen, self.activeHandler == .agent else { return }
+            self.log("⏱️ No response from the agent")
+            self.setError("The agent didn't respond — check the Jarvis bridge is running.")
+        }
+    }
+
+    private func cancelAgentWatchdog() {
+        agentWatchdog?.cancel()
+        agentWatchdog = nil
+    }
+
+    /// Hand the current turn to the agent over the socket and start the no-reply watchdog.
+    private func sendToAgent(_ text: String) {
+        statusText = "Working…"
+        voice.playFiller()   // instant acknowledgement → covers the agent round-trip
+        socket.send(text: text)
+        armAgentWatchdog()
+    }
+
     // MARK: Two-speed routing
 
     /// The fork: every utterance (spoken or typed) goes to the fast brain first. Chit-chat
@@ -412,9 +463,7 @@ final class JarvisViewModel: ObservableObject {
             // Locked to the agent — skip the fast brain entirely (also free: no API call).
             activeHandler = .agent
             log("🟠 → Agent (locked)")
-            statusText = "Working…"
-            voice.playFiller()
-            socket.send(text: text)
+            sendToAgent(text)
 
         case .chatbot:
             // Locked to the chatbot — make the fast brain answer directly.
@@ -432,9 +481,7 @@ final class JarvisViewModel: ObservableObject {
                     // No key / over cap / call failed → fall back to the agent so you're never stuck.
                     activeHandler = .agent
                     log("→ Agent (chatbot unavailable)")
-                    statusText = "Working…"
-                    voice.playFiller()
-                    socket.send(text: text)
+                    sendToAgent(text)
                 }
             }
 
@@ -461,9 +508,7 @@ final class JarvisViewModel: ObservableObject {
                 case .delegate:
                     activeHandler = .agent
                     log("→ Handing to the agent")
-                    statusText = "Working…"
-                    voice.playFiller()   // instant acknowledgement → covers the agent round-trip
-                    socket.send(text: text)
+                    sendToAgent(text)
                 }
             }
         }
@@ -487,6 +532,7 @@ final class JarvisViewModel: ObservableObject {
     /// brain (route) — then drop back into conversation mode. Bumping `speechGen` makes
     /// this the live utterance, so an earlier in-flight speak/filler tears itself down.
     private func deliver(_ text: String) {
+        cancelAgentWatchdog()      // a reply (or fast-brain answer) landed — stop the timer
         speechGen &+= 1
         let gen = speechGen
         speakingText = text
@@ -521,6 +567,7 @@ final class JarvisViewModel: ObservableObject {
     /// Stop Jarvis mid-sentence and hand the floor straight back to you.
     func interrupt() {
         guard state == .speaking else { return }
+        cancelAgentWatchdog()
         speechGen &+= 1            // invalidate the in-flight speak task
         speakingText = ""
         voice.stop()               // cut the audio now
@@ -533,6 +580,7 @@ final class JarvisViewModel: ObservableObject {
     /// Cancel whatever's in flight (thinking / transcribing / awaiting a reply) and
     /// return to ready. A reply that lands afterwards is ignored (speechGen bumped).
     func cancel() {
+        cancelAgentWatchdog()
         speechGen &+= 1
         speakingText = ""
         voice.stop()
