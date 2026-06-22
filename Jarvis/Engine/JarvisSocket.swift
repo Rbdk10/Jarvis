@@ -25,27 +25,35 @@ final class JarvisSocket: NSObject, ObservableObject {
     /// Agent asks the app to open the projector on a URL: {"type":"open_url","url":"https://…"}
     var onOpenURL: ((String) -> Void)?
 
-    private let session = URLSession(configuration: .default)
+    private lazy var session: URLSession = URLSession(
+        configuration: .default, delegate: self, delegateQueue: nil)
     private var task: URLSessionWebSocketTask?
     private var pingTimer: Timer?
     private var reconnectAttempt = 0
     private var shouldRun = false
 
+    /// True only once the WebSocket handshake has actually completed (set by the delegate),
+    /// so callers never send into a socket that isn't really up. `status` mirrors this for the UI.
+    private(set) var isConnected = false
+
     func connect() {
         shouldRun = true
         guard let url = AppConfig.socketURL else { onError?("Bad socket URL"); return }
         status = .connecting
+        isConnected = false
         let t = session.webSocketTask(with: url)
         task = t
         t.resume()
         receive()
         startPing()
-        status = .connected
-        reconnectAttempt = 0
+        // NOTE: do NOT mark .connected here — the task has only been *started*. We flip to
+        // .connected from urlSession(_:webSocketTask:didOpenWithProtocol:) once the handshake
+        // genuinely succeeds, so a dead bridge or a rejected token no longer shows as "Ready".
     }
 
     func disconnect() {
         shouldRun = false
+        isConnected = false
         pingTimer?.invalidate(); pingTimer = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -56,7 +64,15 @@ final class JarvisSocket: NSObject, ObservableObject {
         let payload: [String: Any] = ["type": "message", "text": text]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let str = String(data: data, encoding: .utf8) else { return }
-        task?.send(.string(str)) { [weak self] err in
+        // If the socket isn't actually up, `task?.send` would silently no-op and the agent
+        // would just never reply. Surface it instead so the caller can recover (and try to
+        // reconnect so the next turn has a chance).
+        guard let task, isConnected else {
+            onError?("Not connected to the agent. Reconnecting…")
+            if shouldRun { connect() }
+            return
+        }
+        task.send(.string(str)) { [weak self] err in
             if let err { Task { @MainActor in self?.onError?(err.localizedDescription) } }
         }
     }
@@ -68,7 +84,12 @@ final class JarvisSocket: NSObject, ObservableObject {
         if let caption, !caption.isEmpty { payload["caption"] = caption }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let str = String(data: data, encoding: .utf8) else { return }
-        task?.send(.string(str)) { [weak self] err in
+        guard let task, isConnected else {
+            onError?("Not connected to the agent. Reconnecting…")
+            if shouldRun { connect() }
+            return
+        }
+        task.send(.string(str)) { [weak self] err in
             if let err { Task { @MainActor in self?.onError?(err.localizedDescription) } }
         }
     }
@@ -120,6 +141,7 @@ final class JarvisSocket: NSObject, ObservableObject {
     }
 
     private func handleDrop(_ reason: String) {
+        isConnected = false
         status = .disconnected
         pingTimer?.invalidate(); pingTimer = nil
         guard shouldRun else { return }
@@ -128,6 +150,32 @@ final class JarvisSocket: NSObject, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.shouldRun else { return }
             self.connect()
+        }
+    }
+}
+
+// MARK: - Real connection state
+
+/// The handshake-level open/close signals. Without these the task reports "started" as
+/// "connected"; with them, `status`/`isConnected` reflect whether the bridge is genuinely up.
+extension JarvisSocket: URLSessionWebSocketDelegate {
+    nonisolated func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+                               didOpenWithProtocol protocol: String?) {
+        Task { @MainActor in
+            self.isConnected = true
+            self.reconnectAttempt = 0
+            self.status = .connected
+        }
+    }
+
+    nonisolated func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+                               didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+                               reason: Data?) {
+        // The outstanding receive() will also fail and drive the reconnect; here we just make
+        // sure the connected flag/status drop immediately so no send slips through a dead socket.
+        Task { @MainActor in
+            self.isConnected = false
+            if self.status == .connected { self.status = .disconnected }
         }
     }
 }

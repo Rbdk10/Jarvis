@@ -24,7 +24,9 @@ enum AppConfig {
     static var wsToken: String { string("JARVIS_WS_TOKEN") }
     static var wsHost: String {
         let h = string("JARVIS_WS_HOST")
-        return h.isEmpty ? "jarvis.ngrok.app" : h
+        // Fallback matches the documented host (README + Secrets.xcconfig.example). The real
+        // value comes from Secrets.xcconfig; this only matters if it's left unset.
+        return h.isEmpty ? "sirjarvis.ngrok.app" : h
     }
 
     /// wss://<host>/ws?token=<token>  — built in code so the URL never lives in xcconfig
