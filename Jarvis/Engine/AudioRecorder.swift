@@ -166,6 +166,14 @@ final class WakeWordListener: ObservableObject {
     }
 }
 
+/// The result of an on-device transcription: the text plus the recogniser's average
+/// per-word confidence. `confidence` is `-1` when the recogniser reports no confidence
+/// scores (so callers know to skip confidence gating rather than treat it as "low").
+struct STTResult {
+    let text: String
+    let confidence: Float   // 0...1, or -1 if unavailable
+}
+
 /// Transcribes a recorded audio file ON-DEVICE via the Speech framework — no network
 /// round-trip, so your command becomes text almost instantly. Returns nil if on-device
 /// recognition is unavailable or yields nothing, so the caller can fall back to cloud STT.
@@ -173,18 +181,26 @@ final class WakeWordListener: ObservableObject {
 final class OnDeviceSTT {
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
 
-    func transcribe(fileURL: URL) async -> String? {
+    func transcribe(fileURL: URL) async -> STTResult? {
         guard let recognizer, recognizer.isAvailable else { return nil }
         let req = SFSpeechURLRecognitionRequest(url: fileURL)
         req.shouldReportPartialResults = false
         if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+        return await withCheckedContinuation { (cont: CheckedContinuation<STTResult?, Never>) in
             let once = ResumeOnce(cont)
             // Safety net: never hang the conversation if recognition never completes.
             DispatchQueue.global().asyncAfter(deadline: .now() + 4) { once.fire(nil) }
             recognizer.recognitionTask(with: req) { result, error in
                 if let result, result.isFinal {
-                    once.fire(result.bestTranscription.formattedString)
+                    let t = result.bestTranscription
+                    // Average confidence over the segments that carry a score. Background
+                    // noise / footsteps that slip past the recogniser come back as a few
+                    // stray words with near-zero confidence; real speech scores much higher.
+                    let scored = t.segments.filter { $0.confidence > 0 }
+                    let conf = scored.isEmpty
+                        ? -1
+                        : scored.map { $0.confidence }.reduce(0, +) / Float(scored.count)
+                    once.fire(STTResult(text: t.formattedString, confidence: conf))
                 } else if error != nil {
                     once.fire(nil)
                 }
@@ -198,9 +214,9 @@ final class OnDeviceSTT {
 private final class ResumeOnce: @unchecked Sendable {
     private var done = false
     private let lock = NSLock()
-    private let cont: CheckedContinuation<String?, Never>
-    init(_ c: CheckedContinuation<String?, Never>) { cont = c }
-    func fire(_ value: String?) {
+    private let cont: CheckedContinuation<STTResult?, Never>
+    init(_ c: CheckedContinuation<STTResult?, Never>) { cont = c }
+    func fire(_ value: STTResult?) {
         lock.lock(); defer { lock.unlock() }
         guard !done else { return }
         done = true

@@ -84,7 +84,14 @@ final class JarvisViewModel: ObservableObject {
     private var silenceTicks = 0            // consecutive below-threshold samples after speech
     private let speechOn: Float = 0.16      // level to count as voice (with hysteresis)
     private let speechOff: Float = 0.11
-    private let runUpToStart = 3            // ~0.15s of voice to begin capture
+    private let runUpToStart = 3            // ~0.15s of voice to begin capture — kept snappy so
+                                            // short commands and a quick reply after the wake
+                                            // word still register. Footsteps/noise are filtered
+                                            // AFTER capture by the STT confidence gate below,
+                                            // not by making the onset harder (which also ate
+                                            // real short speech).
+    private static let minSTTConfidence: Float = 0.30  // below this, on-device STT is treated
+                                            // as background noise and dropped, not answered.
     private let silenceToEnd = 8            // ~0.4s of trailing silence to end (×0.05s) — snappier turn-taking
     private var noSpeechTicks = 0           // ticks listening-but-silent after the wake word
     private let noSpeechTimeout = 160       // ~8s of no speech → drop back to wake word
@@ -379,7 +386,18 @@ final class JarvisViewModel: ObservableObject {
             do {
                 // On-device STT first (instant, no network). Fall back to cloud STT only
                 // if local recognition is unavailable or yields nothing.
-                var text = await onDeviceSTT.transcribe(fileURL: file) ?? ""
+                var text = ""
+                if let stt = await onDeviceSTT.transcribe(fileURL: file) {
+                    // Noise gate: if the recogniser scored this capture and the score is low,
+                    // it's almost certainly background noise / footsteps that crept past the
+                    // VAD — drop it silently rather than answering it. (Real speech scores
+                    // well above the floor; a `-1` score means no rating, so we don't gate.)
+                    if stt.confidence >= 0, stt.confidence < Self.minSTTConfidence {
+                        log("🔇 Ignored — low-confidence audio (likely background noise)")
+                        state = .idle; statusText = "Ready"; beginIdleListening(); return
+                    }
+                    text = stt.text
+                }
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     log("↩︎ on-device STT empty — using cloud")
                     text = try await voice.transcribe(fileURL: file)
