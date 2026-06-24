@@ -61,6 +61,11 @@ final class JarvisSocket: NSObject, ObservableObject {
         }
     }
 
+    /// Reply to the bridge's application-level heartbeat so it keeps the socket open.
+    private func sendPong() {
+        task?.send(.string(#"{"type":"pong"}"#)) { _ in }
+    }
+
     /// Send a photo to Jarvis. The bridge decodes `base64` (a JPEG), saves it, and hands
     /// the file path (plus the optional caption) to the agent.
     func sendImage(base64: String, caption: String?) {
@@ -98,6 +103,11 @@ final class JarvisSocket: NSObject, ObservableObject {
               let type = obj["type"] as? String else { return }
         switch type {
         case "reply":  if let text = obj["text"] as? String { onReply?(text) }
+        // The bridge sends application-level {"type":"ping"} heartbeats every ~10s and
+        // closes the socket ("no pong") if it doesn't get a {"type":"pong"} back within
+        // ~30s. (These are JSON frames, distinct from the WS control-frame ping in
+        // startPing().) Without this the connection drops every ~30s mid-conversation.
+        case "ping":   sendPong()
         case "status": if let label = obj["label"] as? String { onStatus?(label) }
         case "error":  onError?(obj["message"] as? String ?? "error")
         case "open_url": if let url = obj["url"] as? String { onOpenURL?(url) }
