@@ -24,6 +24,10 @@ final class JarvisSocket: NSObject, ObservableObject {
     var onArtifact: ((JarvisArtifact) -> Void)?
     /// Agent asks the app to open the projector on a URL: {"type":"open_url","url":"https://…"}
     var onOpenURL: ((String) -> Void)?
+    /// Jarvis's context-window fullness, 0–100%. The bridge derives it from the session's
+    /// live token usage and pushes {"type":"context","pct":N}. Drives the on-screen gauge;
+    /// when it climbs, he slows down and it's time to clear him (see `reset()`).
+    var onContext: ((Int) -> Void)?
 
     private let session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
@@ -64,6 +68,12 @@ final class JarvisSocket: NSObject, ObservableObject {
     /// Reply to the bridge's application-level heartbeat so it keeps the socket open.
     private func sendPong() {
         task?.send(.string(#"{"type":"pong"}"#)) { _ in }
+    }
+
+    /// Ask the bridge to clear Jarvis's working memory — it runs `/clear` on the session
+    /// (instant, keeps him warm), so he's fast again once his context has filled up.
+    func reset() {
+        task?.send(.string(#"{"type":"reset"}"#)) { _ in }
     }
 
     /// Send a photo to Jarvis. The bridge decodes `base64` (a JPEG), saves it, and hands
@@ -111,6 +121,7 @@ final class JarvisSocket: NSObject, ObservableObject {
         case "status": if let label = obj["label"] as? String { onStatus?(label) }
         case "error":  onError?(obj["message"] as? String ?? "error")
         case "open_url": if let url = obj["url"] as? String { onOpenURL?(url) }
+        case "context": if let n = obj["pct"] as? NSNumber { onContext?(n.intValue) }
         case "artifact":
             onArtifact?(JarvisArtifact(
                 kind: (obj["artifact_type"] as? String) ?? (obj["kind"] as? String) ?? "text",

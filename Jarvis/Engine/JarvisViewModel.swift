@@ -43,6 +43,10 @@ final class JarvisViewModel: ObservableObject {
     /// you say "show me the page of project X". ContentView observes this and opens the panel.
     @Published var previewRequest: String?
 
+    /// Jarvis's context-window fullness, 0–100%, pushed live from the bridge. `nil` until the
+    /// first report. As it climbs he slows down; tapping the on-screen gauge clears him.
+    @Published var contextPct: Int?
+
     func setMode(_ m: RouteMode) {
         routeMode = m
         switch m {
@@ -107,6 +111,7 @@ final class JarvisViewModel: ObservableObject {
         socket.onError = { [weak self] msg in self?.setError(msg) }
         socket.onArtifact = { [weak self] art in self?.artifacts.append(art) }
         socket.onOpenURL = { [weak self] url in self?.previewRequest = url }
+        socket.onContext = { [weak self] pct in self?.contextPct = pct }
         socket.onStatus = { [weak self] label in
             // Live "what I'm doing" feed — only meaningful while thinking.
             if self?.state == .thinking { self?.statusText = label }
@@ -288,6 +293,15 @@ final class JarvisViewModel: ObservableObject {
             state = .idle; statusText = "Ready"; level = 0; activeHandler = nil
             beginIdleListening()
         }
+    }
+
+    /// Clear Jarvis's working memory on the mini — runs `/clear` on his session (instant,
+    /// keeps him warm), so he's fast again once his context has filled up. Bound to the
+    /// on-screen context gauge; the bridge pushes the fresh (low) percentage back right after.
+    func resetContext() {
+        log("🧠 Clearing Jarvis's memory to speed him up…")
+        socket.reset()
+        contextPct = 0
     }
 
     /// Open the mic and wait for speech. Capture begins automatically when you start

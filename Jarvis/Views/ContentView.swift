@@ -33,6 +33,9 @@ struct ContentView: View {
 
     @State private var showLog = false
 
+    // Confirm before clearing Jarvis's memory (the context gauge tap).
+    @State private var showResetConfirm = false
+
     // Swipe-left web preview (right drawer) — a small browser for public sites. The agent
     // can also push a URL to open it (see vm.previewRequest below).
     @State private var showPreview = false
@@ -68,7 +71,11 @@ struct ContentView: View {
                             stopSignButton.padding(.leading, 16).padding(.top, 10)
                         }
                         Spacer()
-                        muteButton.padding(.trailing, 16).padding(.top, 10)
+                        VStack(spacing: 10) {
+                            muteButton
+                            if let pct = vm.contextPct { contextGauge(pct) }
+                        }
+                        .padding(.trailing, 16).padding(.top, 10)
                     }
                     Spacer()
                 }
@@ -202,6 +209,44 @@ struct ContentView: View {
             withAnimation { showPreview = true; showLog = false; showInput = false; showArtifacts = false }
             inputFocused = false
             vm.previewRequest = nil
+        }
+        // Tap the context gauge → confirm, then clear Jarvis's memory so he's fast again.
+        .confirmationDialog("Clear Jarvis's memory?",
+                            isPresented: $showResetConfirm, titleVisibility: .visible) {
+            Button("Start fresh") { vm.resetContext() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Clears his working memory so he replies faster. He'll forget the current conversation — not your projects.")
+        }
+    }
+
+    /// Top-right gauge: how full Jarvis's context window is (0–100%). Green normally, amber
+    /// past 70%, red past 85% — the higher it climbs the slower he gets. Tap to clear him.
+    private func contextGauge(_ pct: Int) -> some View {
+        let clamped = max(0, min(100, pct))
+        let color = contextTint(clamped)
+        return Button { showResetConfirm = true } label: {
+            ZStack {
+                Circle().stroke(.white.opacity(0.10), lineWidth: 3)
+                Circle()
+                    .trim(from: 0, to: max(0.001, CGFloat(clamped) / 100))
+                    .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text("\(clamped)")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            .frame(width: 44, height: 44)
+            .background(Circle().fill(.white.opacity(0.08)))
+        }
+        .accessibilityLabel("Jarvis memory \(clamped) percent full. Tap to clear it and speed him up.")
+    }
+
+    private func contextTint(_ pct: Int) -> Color {
+        switch pct {
+        case ..<70:   return Color(red: 0.35, green: 0.85, blue: 0.55)   // green
+        case 70..<85: return Color(red: 1.00, green: 0.72, blue: 0.20)   // amber
+        default:      return Color(red: 1.00, green: 0.35, blue: 0.32)   // red
         }
     }
 
