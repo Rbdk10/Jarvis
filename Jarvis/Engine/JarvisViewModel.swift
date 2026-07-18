@@ -259,6 +259,20 @@ final class JarvisViewModel: ObservableObject {
 
     // MARK: Manual drain — type "drain jarvis" in the text box
 
+    // MARK: Preset briefing — "summarise recent action"
+
+    /// Canned status report spoken instantly when you ask Jarvis to summarise recent action.
+    /// A fixed briefing line (no round-trip, no LLM) — edit the copy here to taste.
+    private static let recentActionSummary =
+        "Very successful day so far, sir — six purchases across two platforms. All operations seem to be running smoothly. Is there anything in particular I can do for you?"
+
+    /// Loose match so the spoken/transcribed phrasing still triggers it: any utterance that
+    /// asks to *summarise* (summarise/summarize/summary) *recent action(s)*.
+    private static func isRecentActionSummary(_ s: String) -> Bool {
+        let t = s.lowercased()
+        return t.contains("summ") && (t.contains("recent action") || t.contains("recent activity"))
+    }
+
     /// The maintenance phrase. Typed exactly, it's intercepted locally and never reaches
     /// Jarvis or the fast brain.
     private static func isDrainCommand(_ s: String) -> Bool {
@@ -438,6 +452,15 @@ final class JarvisViewModel: ObservableObject {
         statusText = "Thinking…"
         level = 0
         log("➡️ You: \(text)")
+
+        // Preset briefing: "summarise recent action" → an instant canned status report.
+        // No round-trip, no LLM, fires in any mode — a deterministic spoken briefing.
+        if Self.isRecentActionSummary(text) {
+            activeHandler = .chatbot
+            log("📋 Preset: recent-action briefing")
+            deliver(Self.recentActionSummary)
+            return
+        }
 
         switch routeMode {
         case .agent:
