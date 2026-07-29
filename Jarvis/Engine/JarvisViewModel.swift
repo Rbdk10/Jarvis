@@ -273,6 +273,18 @@ final class JarvisViewModel: ObservableObject {
         return t.contains("summ") && (t.contains("recent action") || t.contains("recent activity"))
     }
 
+    /// "clear yourself", "clear your memory", "wipe your context", "start fresh", "reset your
+    /// memory" … Matched precisely (a clear/wipe/reset *about Jarvis himself*) so it never
+    /// fires on a real task like "clear the results" or "reset the leaderboard".
+    private static func isClearCommand(_ s: String) -> Bool {
+        let t = s.lowercased()
+        if t.contains("start fresh") || t.contains("fresh start") { return true }
+        let subjects = ["yourself", "your memory", "your context", "your mind", "your head",
+                        "your chat", "the chat", "your conversation", "the conversation"]
+        let verbs = ["clear", "wipe", "reset"]
+        return verbs.contains(where: { t.contains($0) }) && subjects.contains(where: { t.contains($0) })
+    }
+
     /// The maintenance phrase. Typed exactly, it's intercepted locally and never reaches
     /// Jarvis or the fast brain.
     private static func isDrainCommand(_ s: String) -> Bool {
@@ -459,6 +471,20 @@ final class JarvisViewModel: ObservableObject {
             activeHandler = .chatbot
             log("📋 Preset: recent-action briefing")
             deliver(Self.recentActionSummary)
+            return
+        }
+
+        // "Clear yourself" / "start fresh" → the RELIABLE reset: the bridge runs /clear
+        // directly (keystroke injection), independent of the agent. The old path asked the
+        // (often bogged-down) agent to run a script itself, which silently failed — so he'd
+        // *say* he cleared without actually clearing. We speak the farewell locally so it's
+        // confirmed even when he's at 100% and crawling.
+        if Self.isClearCommand(text) {
+            activeHandler = .chatbot
+            log("🧠 Clear command → bridge reset (/clear)")
+            socket.reset()
+            contextPct = 0
+            deliver("Clearing my memory now, sir. Back in a moment.")
             return
         }
 
