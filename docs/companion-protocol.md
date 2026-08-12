@@ -65,6 +65,20 @@ a small tool/hook the agent can call (e.g. `jarvis_say("…")`) that pushes a `s
 frame over the same socket the `reply` goes out on. Keep `status` too (useful trace +
 Phase-A fallback when the agent doesn't narrate).
 
+### Slim implementation (live)
+
+- **Plugin** `~/.claude/plugins/marketplace/plugins/jarvis/server.ts` — MCP tools
+  `jarvis_say` and `jarvis_ask` write `{type:'say'|'ask'}` lines to
+  `/tmp/jarvis/outbox.jsonl`. `jarvis_ask`'s tool + channel instructions tell the agent
+  to ask (not assume) and to **end its turn after asking** — the user's answer arrives
+  as the next inbound message and resumes the same session. (Takes effect on the next
+  `claude` session restart.)
+- **Relay** `~/.claude/scripts/jarvis-server.ts` — forwards a fixed `specialTypes`
+  allowlist as-is (everything else is wrapped as a `reply`). `ask` is on that list, so
+  the frame reaches the app unchanged. `ask` is buffered like `reply` (delivered on a
+  quick reconnect), unlike `say`/`context` which are drop-on-miss. (Live now — relay
+  restarted.)
+
 ## Fallback behaviour (already handled by the app)
 
 - No `say` at all → Phase A auto-narration from `status` (unchanged).
