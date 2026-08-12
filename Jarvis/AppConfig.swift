@@ -38,10 +38,24 @@ enum AppConfig {
         return comps.url
     }
 
+    // MARK: - Supabase (Jarvis memory DB)
+    // The publishable ("anon") key ships in the app — it's designed to; Row-Level
+    // Security is the real guard. Only the digest (state table) is readable with it;
+    // personal tables stay locked until owner auth is added.
+    static var supabaseRef: String { string("SUPABASE_REF") }
+    static var supabaseKey: String { string("SUPABASE_PUBLISHABLE_KEY") }
+    /// https://<ref>.supabase.co — built in code (xcconfig treats `//` as a comment,
+    /// so we store only the ref there), mirroring socketURL above.
+    static var supabaseURL: URL? {
+        guard !supabaseRef.isEmpty else { return nil }
+        return URL(string: "https://\(supabaseRef).supabase.co")
+    }
+
     // ElevenLabs voice tuning (matches the Jarvis telegram-voice.env).
-    // Low-latency model so Jarvis starts speaking sooner. (Was eleven_multilingual_v2 —
-    // richer but slower; switch back if the voice quality is missed.)
-    static let ttsModel = "eleven_turbo_v2_5"
+    // Fastest model so Jarvis starts speaking soonest (~75ms inference). Ladder if the
+    // voice quality is missed: eleven_flash_v2_5 (fastest) → eleven_turbo_v2_5 →
+    // eleven_multilingual_v2 (richest, slowest). Speed is the priority, so: Flash.
+    static let ttsModel = "eleven_flash_v2_5"
     static let sttModel = "scribe_v1"
     static let stability = 0.83
     static let similarity = 0.55

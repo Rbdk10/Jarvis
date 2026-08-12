@@ -8,6 +8,16 @@ struct ActivityEntry: Identifiable {
     let text: String
 }
 
+/// One line in the text-mode chat transcript. Built up in both modes so switching
+/// voice→text (or back) keeps a coherent history.
+struct ChatMessage: Identifiable, Equatable {
+    enum Role { case user, jarvis }
+    let id = UUID()
+    let role: Role
+    let text: String
+    let time: Date
+}
+
 /// Orchestrates: idle → listening → thinking → speaking → idle.
 /// Publishes `level` (0...1) for the orb and `state`/`statusText` for the UI.
 ///
@@ -56,6 +66,49 @@ final class JarvisViewModel: ObservableObject {
         }
     }
 
+    // MARK: Reply mode (voice ↔ text)
+
+    /// Voice (default): replies are spoken and the mic listens hands-free.
+    /// Text: Jarvis stays silent, the mic + wake word are off, and replies appear
+    /// on-screen in the chat transcript. The header toggle flips this.
+    enum ReplyMode { case voice, text }
+    @Published var replyMode: ReplyMode = .voice
+
+    /// The on-screen chat transcript (text mode). Filled in both modes so switching
+    /// voice→text keeps the conversation history intact.
+    @Published var messages: [ChatMessage] = []
+
+    /// Flip between spoken and on-screen replies. Entering text mode goes fully silent
+    /// (cuts speech, closes the mic, stops the wake word); leaving it resumes listening.
+    func setReplyMode(_ m: ReplyMode) {
+        guard m != replyMode else { return }
+        replyMode = m
+        switch m {
+        case .text:
+            stopCompanion()           // end any voice narration before going silent
+            speechGen &+= 1            // supersede any in-flight speak/filler
+            voice.stop()
+            wake.stop(); recorder.stop()
+            armed = false; heardSpeech = false; level = 0
+            if state == .listening || state == .speaking { state = .idle }
+            activeHandler = nil
+            statusText = "Text mode"
+            log("⌨️ Switched to text mode")
+        case .voice:
+            statusText = "Ready"
+            log("🔊 Switched to voice mode")
+            beginIdleListening()
+        }
+    }
+
+    /// Append a line to the chat transcript, trimming and capping the history.
+    private func appendMessage(_ role: ChatMessage.Role, _ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        messages.append(ChatMessage(role: role, text: t, time: Date()))
+        if messages.count > 300 { messages.removeFirst(messages.count - 300) }
+    }
+
     /// Artifacts Jarvis has sent, newest last — shown in the swipe-up panel.
     @Published var artifacts: [JarvisArtifact] = []
     /// Timestamped step-by-step trace of what Jarvis is doing — shown in the swipe-right
@@ -81,6 +134,12 @@ final class JarvisViewModel: ObservableObject {
     private var capNoticeLogged = false     // one-time "spend cap reached" notice
     private var suppressBacklogUntil: Date = .distantPast   // swallow replies right after a drain
 
+    // Routing telemetry: how the current turn routed + when it started, logged on delivery
+    // (to the on-screen trace and to Supabase, so the dispatcher can be tuned from real use).
+    private var turnStart: Date?
+    private var lastUtterance = ""
+    private var pendingRoute: (tier: String, model: String?, reason: String, escalated: Bool)?
+
     // MARK: Voice-activity detection
     private var armed = false               // mic is open, waiting for / capturing speech
     private var heardSpeech = false         // speech has begun within this capture
@@ -96,7 +155,9 @@ final class JarvisViewModel: ObservableObject {
                                             // real short speech).
     private static let minSTTConfidence: Float = 0.30  // below this, on-device STT is treated
                                             // as background noise and dropped, not answered.
-    private let silenceToEnd = 8            // ~0.4s of trailing silence to end (×0.05s) — snappier turn-taking
+    private let silenceToEnd = 6            // ~0.3s of trailing silence to end (×0.05s) — snappier turn-taking.
+                                            // Backed by adaptive endpointing (recentPeak) so it holds up in
+                                            // noise. If he starts cutting you off mid-thought, bump back to 8.
     private var noSpeechTicks = 0           // ticks listening-but-silent after the wake word
     private let noSpeechTimeout = 160       // ~8s of no speech → drop back to wake word
     private var recentPeak: Float = 0       // decaying peak of your speaking volume (adaptive endpointing)
@@ -104,6 +165,18 @@ final class JarvisViewModel: ObservableObject {
     // Speech serialisation — guarantees Jarvis never talks over himself.
     private var speechGen = 0               // bumped per reply / interrupt; stale tasks no-op
     private var speakingText = ""           // currently-spoken text, for duplicate suppression
+
+    // MARK: Companion overlay — the fast brain narrates the agent's work in real time.
+    // While the agent (the deep worker) runs, the on-device brain keeps you company: an
+    // instant tailored opener, then paced spoken updates grounded in the agent's live status
+    // stream — so there's never dead air, and the final agent answer still lands as the real
+    // reply. Voice mode only; falls back to the canned filler when the fast brain is off.
+    private var agentTurnActive = false     // true from hand-off until the agent replies / cancel
+    private var companionRequest = ""       // the utterance the agent is working on (context for narration)
+    private var statusBuffer: [String] = [] // recent agent status lines to narrate from
+    private var narrationSaid: [String] = []// what the companion has already spoken (avoid repeats)
+    private var narrationTask: Task<Void, Never>?   // the paced narration loop
+    private var lastNarration = Date.distantPast    // gates the "quiet worker" reassurance
 
     init() {
         wake.onWake = { [weak self] in self?.onWake() }
@@ -113,9 +186,15 @@ final class JarvisViewModel: ObservableObject {
         socket.onOpenURL = { [weak self] url in self?.previewRequest = url }
         socket.onContext = { [weak self] pct in self?.contextPct = pct }
         socket.onStatus = { [weak self] label in
+            guard let self else { return }
             // Live "what I'm doing" feed — only meaningful while thinking.
-            if self?.state == .thinking { self?.statusText = label }
-            self?.log(label)
+            if self.state == .thinking { self.statusText = label }
+            self.log(label)
+            // Feed the companion so it can narrate real progress (not invent it).
+            if self.agentTurnActive {
+                self.statusBuffer.append(label)
+                if self.statusBuffer.count > 12 { self.statusBuffer.removeFirst(self.statusBuffer.count - 12) }
+            }
         }
 
         // Mic meter drives voice-activity detection. It never drives the orb — the
@@ -150,6 +229,16 @@ final class JarvisViewModel: ObservableObject {
         // Pre-render the instant-acknowledgement clips in the background so the very
         // first "thinking" moment already has them cached (no dead air, no network wait).
         Task { await voice.prewarmFillers() }
+
+        // Load the project digest so the fast brain is grounded in the user's world
+        // from the first turn (fails soft — ungrounded if Supabase is unreachable).
+        Task { await fastBrain.refreshDigest() }
+    }
+
+    /// App returned to the foreground. iOS suspends the WebSocket while backgrounded, so
+    /// proactively re-establish it — otherwise Jarvis looks connected but silently isn't.
+    func appDidBecomeActive() {
+        socket.foreground()
     }
 
     // MARK: Hands-free listening
@@ -158,7 +247,7 @@ final class JarvisViewModel: ObservableObject {
     /// heard do we open the mic to capture a command (see `onWake`). This is why
     /// background chatter no longer triggers Jarvis.
     func beginIdleListening() {
-        guard handsFree, state == .idle else { return }
+        guard replyMode == .voice, handsFree, state == .idle else { return }
         recorder.stop()           // ensure the command recorder isn't holding the mic
         armed = false
         Task {
@@ -254,6 +343,8 @@ final class JarvisViewModel: ObservableObject {
         statusText = "Thinking…"
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         log("📷 You sent a photo\(cap.isEmpty ? "" : ": \(cap)")")
+        appendMessage(.user, cap.isEmpty ? "📷 Photo" : "📷 \(cap)")
+        beginAgentTurn(request: cap.isEmpty ? "the photo I just sent" : cap)   // companion narrates the vision task
         socket.sendImage(base64: cap.isEmpty ? base64 : base64, caption: cap.isEmpty ? nil : cap)
     }
 
@@ -299,6 +390,7 @@ final class JarvisViewModel: ObservableObject {
     /// bridge replays to the fresh connection (reading them is what drains its buffer). Leaves
     /// you at a clean "Ready" instead of hearing old, out-of-context lines. Purely on-device.
     func drainQueue() {
+        stopCompanion()
         speechGen &+= 1                 // cancel any in-flight speak / route task
         let gen = speechGen
         speakingText = ""
@@ -328,12 +420,13 @@ final class JarvisViewModel: ObservableObject {
         log("🧠 Clearing Jarvis's memory to speed him up…")
         socket.reset()
         contextPct = 0
+        messages.removeAll()   // clear the on-screen chat to match
     }
 
     /// Open the mic and wait for speech. Capture begins automatically when you start
     /// talking and ends after a short trailing silence.
     func armListening() {
-        guard handsFree, state == .idle, !armed else { return }
+        guard replyMode == .voice, handsFree, state == .idle, !armed else { return }
         Task {
             guard await recorder.requestPermission() else { setError("Microphone denied"); return }
             do {
@@ -458,17 +551,21 @@ final class JarvisViewModel: ObservableObject {
     /// spoken "one moment" filler to cover the longer round-trip). With no Anthropic key the
     /// fast brain returns `.delegate`, so this collapses to the old "always ask the agent".
     private func route(_ text: String) {
+        stopCompanion()             // a new utterance ends any prior agent-turn narration
         speechGen &+= 1              // this is now the live intent; supersede any stale speak
         let gen = speechGen
         state = .thinking
         statusText = "Thinking…"
         level = 0
         log("➡️ You: \(text)")
+        appendMessage(.user, text)                 // show it in the text-mode transcript
+        turnStart = Date(); lastUtterance = text   // start the routing-latency clock
 
         // Preset briefing: "summarise recent action" → an instant canned status report.
         // No round-trip, no LLM, fires in any mode — a deterministic spoken briefing.
         if Self.isRecentActionSummary(text) {
             activeHandler = .chatbot
+            pendingRoute = (tier: "local", model: nil, reason: "preset: recent-action briefing", escalated: false)
             log("📋 Preset: recent-action briefing")
             deliver(Self.recentActionSummary)
             return
@@ -481,9 +578,11 @@ final class JarvisViewModel: ObservableObject {
         // confirmed even when he's at 100% and crawling.
         if Self.isClearCommand(text) {
             activeHandler = .chatbot
+            pendingRoute = (tier: "local", model: nil, reason: "preset: clear command", escalated: false)
             log("🧠 Clear command → bridge reset (/clear)")
             socket.reset()
             contextPct = 0
+            messages.removeAll()   // start the on-screen chat fresh too
             deliver("Clearing my memory now, sir. Back in a moment.")
             return
         }
@@ -492,9 +591,10 @@ final class JarvisViewModel: ObservableObject {
         case .agent:
             // Locked to the agent — skip the fast brain entirely (also free: no API call).
             activeHandler = .agent
+            pendingRoute = (tier: "agent", model: nil, reason: "locked to agent", escalated: false)
             log("🟠 → Agent (locked)")
             statusText = "Working…"
-            voice.playFiller()
+            beginAgentTurn(request: text)
             socket.send(text: text)
 
         case .chatbot:
@@ -507,19 +607,34 @@ final class JarvisViewModel: ObservableObject {
                 }
                 guard gen == speechGen else { return }
                 if let say {
+                    pendingRoute = (tier: "fast", model: AppConfig.fastBrainModel, reason: "locked chatbot answered", escalated: false)
                     log("🔵 Chatbot (locked)")
                     deliver(say)
                 } else {
                     // No key / over cap / call failed → fall back to the agent so you're never stuck.
                     activeHandler = .agent
+                    pendingRoute = (tier: "agent", model: nil, reason: "chatbot unavailable → agent", escalated: true)
                     log("→ Agent (chatbot unavailable)")
                     statusText = "Working…"
-                    voice.playFiller()
+                    beginAgentTurn(request: text)
                     socket.send(text: text)
                 }
             }
 
         case .auto:
+            // Tier 0 — obvious tasks / live-data go straight to the agent, skipping the
+            // fast-brain round-trip. Conservative: it only trades a little speed, never
+            // correctness (anything it misses is still escalated by the fast brain below).
+            if Router.looksLikeAgentTask(text) {
+                activeHandler = .agent
+                pendingRoute = (tier: "agent", model: nil, reason: "heuristic: task/live-data", escalated: false)
+                log("🧭 → Agent (heuristic: looks like a task)")
+                statusText = "Working…"
+                beginAgentTurn(request: text)
+                socket.send(text: text)
+                return
+            }
+
             // If the spend cap has tripped, say so once — then everything quietly goes to the
             // agent (chit-chat is no longer instant, but voice still works and no more spend).
             if fastBrain.isOverSpendCap, !capNoticeLogged {
@@ -537,13 +652,15 @@ final class JarvisViewModel: ObservableObject {
                 switch decision {
                 case .reply(let say):
                     activeHandler = .chatbot
+                    pendingRoute = (tier: "fast", model: AppConfig.fastBrainModel, reason: "fast brain answered", escalated: false)
                     log("⚡ Fast reply")
                     deliver(say)
                 case .delegate:
                     activeHandler = .agent
+                    pendingRoute = (tier: "agent", model: nil, reason: "fast brain escalated", escalated: true)
                     log("→ Handing to the agent")
                     statusText = "Working…"
-                    voice.playFiller()   // instant acknowledgement → covers the agent round-trip
+                    beginAgentTurn(request: text)   // instant acknowledgement → covers the agent round-trip
                     socket.send(text: text)
                 }
             }
@@ -560,8 +677,113 @@ final class JarvisViewModel: ObservableObject {
         // Ignore an exact duplicate of what we're already saying (the bridge can echo
         // a reply twice) — this is what caused two overlapping voices.
         if state == .speaking, text == speakingText { return }
+        // In text mode we never enter .speaking, so the guard above can't catch an echo —
+        // also drop a reply identical to the last line already on screen.
+        if replyMode == .text, let last = messages.last, last.role == .jarvis, last.text == text { return }
+        stopCompanion()          // the agent's real answer is here — cut narration, hand over
         log("💬 Reply received: \(text)")
         deliver(text)
+    }
+
+    /// Log how the just-delivered turn routed (tier + latency) to the on-screen trace and
+    /// to Supabase telemetry. No-op when nothing is pending (e.g. the wake-word greeting).
+    /// Latency ≈ end-of-speech → first audio (route start → the moment we begin speaking).
+    private func logRoute() {
+        guard let r = pendingRoute else { return }
+        let latency = turnStart.map { max(0, Int(Date().timeIntervalSince($0) * 1000)) }
+        log("🧭 route: \(r.tier)\(r.escalated ? " (escalated)" : "")\(latency.map { " · \($0)ms" } ?? "")")
+        SupabaseService.logTurn(utterance: lastUtterance, tier: r.tier, model: r.model,
+                                reason: r.reason, escalated: r.escalated, latencyMs: latency)
+        pendingRoute = nil
+        turnStart = nil
+    }
+
+    // MARK: - Companion overlay (narrate the agent's work as it runs)
+
+    /// Kick off the live companion for a turn handed to the agent: an instant tailored opener,
+    /// then a paced narration loop. Voice mode + fast brain only; otherwise the canned filler.
+    private func beginAgentTurn(request: String) {
+        statusText = "Working…"
+        guard replyMode == .voice else { return }   // text mode (Phase A): silent thinking indicator
+        guard fastBrain.isEnabled else { voice.playFiller(); return }
+        agentTurnActive = true
+        companionRequest = request
+        statusBuffer.removeAll()
+        narrationSaid.removeAll()
+        lastNarration = Date()
+        // Instant tailored acknowledgement (falls back to the canned filler if it can't).
+        Task {
+            let opener = await fastBrain.opener(request)
+            guard agentTurnActive else { return }
+            if let opener {
+                narrationSaid.append(opener)
+                log("🗣️ \(opener)")
+                await speakCompanion(opener)
+            } else {
+                voice.playFiller()
+            }
+        }
+        startNarrationLoop()
+    }
+
+    /// Every few seconds, if the agent is still working, speak one short update grounded in the
+    /// status it has emitted — or a gentle holding line if it's gone quiet — so it never feels dead.
+    private func startNarrationLoop() {
+        narrationTask?.cancel()
+        narrationTask = Task { [weak self] in
+            while true {
+                try? await Task.sleep(nanoseconds: 6_500_000_000)   // ~6.5s cadence
+                guard let self, self.agentTurnActive else { return }
+                await self.narrateTick()
+            }
+        }
+    }
+
+    private func narrateTick() async {
+        guard agentTurnActive, state == .thinking, fastBrain.isEnabled else { return }
+        if !statusBuffer.isEmpty {
+            let line = await fastBrain.narrate(request: companionRequest,
+                                               status: statusBuffer, alreadySaid: narrationSaid)
+            guard agentTurnActive, state == .thinking, let line else { return }
+            narrationSaid.append(line)
+            log("🗣️ \(line)")
+            await speakCompanion(line)
+        } else if Date().timeIntervalSince(lastNarration) > 12 {
+            // Quiet worker (no status yet) — a brief reassurance so the line never goes dead.
+            let holding = ["Still on it, sir.", "Working through it now.",
+                           "Won't be a moment, sir."].randomElement() ?? "Still on it, sir."
+            log("🗣️ \(holding)")
+            await speakCompanion(holding)
+        }
+    }
+
+    /// Speak a companion line WITHOUT ending the turn: no mic re-arm, and we drop back to
+    /// "working" afterwards (the agent is still going). Interruptible by the real reply.
+    private func speakCompanion(_ line: String) async {
+        guard agentTurnActive else { return }
+        speechGen &+= 1
+        let gen = speechGen
+        armed = false; heardSpeech = false; recorder.stop()   // mic closed while speaking
+        speakingText = line
+        state = .speaking
+        statusText = "Speaking…"
+        do { try await voice.speak(text: line) } catch { }
+        lastNarration = Date()
+        guard gen == speechGen, agentTurnActive else { return }   // superseded by reply/interrupt
+        state = .thinking
+        statusText = "Working…"
+        level = 0
+    }
+
+    /// End the companion overlay — cancels the narration loop and cuts any narration audio.
+    /// Called when the agent's real reply arrives, or on interrupt/cancel/mode-switch/error.
+    private func stopCompanion() {
+        guard agentTurnActive else { return }
+        agentTurnActive = false
+        narrationTask?.cancel(); narrationTask = nil
+        speechGen &+= 1        // supersede any in-flight narration speak
+        voice.stop()           // cut narration audio so the real answer can take over
+        statusBuffer.removeAll(); narrationSaid.removeAll()
     }
 
     /// Speak a reply we already have in hand — from the agent (handleReply) or the fast
@@ -571,11 +793,22 @@ final class JarvisViewModel: ObservableObject {
         speechGen &+= 1
         let gen = speechGen
         speakingText = text
+        appendMessage(.jarvis, text)   // record it for the transcript (both modes)
+
+        // Text mode: show the reply on screen and stay silent — no TTS, no mic re-arm.
+        if replyMode == .text {
+            voice.stop()
+            logRoute()          // keep routing telemetry working (route start → reply shown)
+            state = .idle; statusText = "Ready"; level = 0; activeHandler = nil
+            log("💬 Replied (text)")
+            return
+        }
 
         // Close the mic while speaking so it can't capture Jarvis's own voice.
         armed = false; heardSpeech = false; recorder.stop()
 
         state = .speaking
+        logRoute()          // telemetry: how this turn routed + end-of-speech → first-audio latency
         statusText = "Speaking…"
         log("🔊 Speaking…")
         Task {
@@ -602,6 +835,7 @@ final class JarvisViewModel: ObservableObject {
     /// Stop Jarvis mid-sentence and hand the floor straight back to you.
     func interrupt() {
         guard state == .speaking else { return }
+        stopCompanion()           // if interrupting a narration, end the agent-turn overlay
         speechGen &+= 1            // invalidate the in-flight speak task
         speakingText = ""
         voice.stop()               // cut the audio now
@@ -614,6 +848,7 @@ final class JarvisViewModel: ObservableObject {
     /// Cancel whatever's in flight (thinking / transcribing / awaiting a reply) and
     /// return to ready. A reply that lands afterwards is ignored (speechGen bumped).
     func cancel() {
+        stopCompanion()
         speechGen &+= 1
         speakingText = ""
         voice.stop()
@@ -625,6 +860,7 @@ final class JarvisViewModel: ObservableObject {
     }
 
     private func setError(_ msg: String) {
+        stopCompanion()
         armed = false; heardSpeech = false; activeHandler = nil
         state = .error(msg); statusText = msg; level = 0
         log("⚠️ Error: \(msg)")

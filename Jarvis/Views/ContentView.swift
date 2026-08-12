@@ -43,6 +43,36 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            if vm.replyMode == .text {
+                textChatScreen
+            } else {
+                voiceScreen
+            }
+        }
+        .sheet(item: $expandedArtifact) { art in
+            ArtifactDetailView(artifact: art)
+        }
+        // Agent asked to "show me the page of …" → open the projector on that URL.
+        .onChange(of: vm.previewRequest) { _, req in
+            guard let req, !req.isEmpty else { return }
+            previewURL = req
+            withAnimation { showPreview = true; showLog = false; showInput = false; showArtifacts = false }
+            inputFocused = false
+            vm.previewRequest = nil
+        }
+        // Tap the context gauge → confirm, then clear Jarvis's memory so he's fast again.
+        .confirmationDialog("Clear Jarvis's memory?",
+                            isPresented: $showResetConfirm, titleVisibility: .visible) {
+            Button("Start fresh") { vm.resetContext() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Clears his working memory so he replies faster. He'll forget the current conversation — not your projects.")
+        }
+    }
+
+    /// The original voice UI: orb, HUD, bottom mic controls, and swipe drawers.
+    private var voiceScreen: some View {
+        ZStack {
             RadialGradient(colors: [Color(white: 0.06), .black],
                            center: .center, startRadius: 5, endRadius: 500)
                 .ignoresSafeArea()
@@ -81,10 +111,14 @@ struct ContentView: View {
                 }
             }
 
-            // Two-button routing override at the very top: lock to Chatbot or Agent.
+            // Mode switches at the very top: Voice/Text output on top, Chatbot/Agent routing below.
             if !showInput {
                 VStack {
-                    modeToggle.padding(.top, 10)
+                    VStack(spacing: 8) {
+                        voiceTextToggle
+                        modeToggle
+                    }
+                    .padding(.top, 10)
                     Spacer()
                 }
             }
@@ -199,25 +233,6 @@ struct ContentView: View {
                     }
                 }
         )
-        .sheet(item: $expandedArtifact) { art in
-            ArtifactDetailView(artifact: art)
-        }
-        // Agent asked to "show me the page of …" → open the projector on that URL.
-        .onChange(of: vm.previewRequest) { _, req in
-            guard let req, !req.isEmpty else { return }
-            previewURL = req
-            withAnimation { showPreview = true; showLog = false; showInput = false; showArtifacts = false }
-            inputFocused = false
-            vm.previewRequest = nil
-        }
-        // Tap the context gauge → confirm, then clear Jarvis's memory so he's fast again.
-        .confirmationDialog("Clear Jarvis's memory?",
-                            isPresented: $showResetConfirm, titleVisibility: .visible) {
-            Button("Start fresh") { vm.resetContext() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Clears his working memory so he replies faster. He'll forget the current conversation — not your projects.")
-        }
     }
 
     /// Top-right gauge: how full Jarvis's context window is (0–100%). Green normally, amber
@@ -505,28 +520,15 @@ struct ContentView: View {
 
     /// Two-button routing override. Lock the conversation to the Chatbot (instant, on-device)
     /// or the Agent (the mini). Tap the lit one again to return to Auto (smart routing).
+    /// While a turn is in flight the highlight follows whoever's actually handling it.
     private var modeToggle: some View {
-        HStack(spacing: 4) {
-            modeButton("Chatbot", mode: .chatbot, tint: orbBlue)
-            modeButton("Agent", mode: .agent, tint: orbAmber)
-        }
-        .padding(3)
-        .background(Capsule().fill(.black.opacity(0.35)))
-        .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
-    }
-
-    private func modeButton(_ title: String, mode: JarvisViewModel.RouteMode, tint: UIColor) -> some View {
-        // While a turn is in flight, light up whoever's actually handling it (working/talking);
-        // otherwise fall back to the locked mode.
-        let active = (vm.activeHandler ?? vm.routeMode) == mode
-        return Text(title)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(active ? .white : .white.opacity(0.55))
-            .padding(.horizontal, 16).padding(.vertical, 7)
-            .background(Capsule().fill(active ? Color(uiColor: tint).opacity(0.9) : Color.clear))
-            .contentShape(Capsule())
-            .onTapGesture { vm.setMode(active ? .auto : mode) }
-            .accessibilityLabel("\(title)\(active ? ", selected. Tap to return to auto" : "")")
+        let current = vm.activeHandler ?? vm.routeMode
+        return SegmentedHUD(items: [
+            .init(title: "Chatbot", icon: nil, tint: Color(uiColor: orbBlue),
+                  isActive: current == .chatbot) { vm.setMode(current == .chatbot ? .auto : .chatbot) },
+            .init(title: "Agent", icon: nil, tint: Color(uiColor: orbAmber),
+                  isActive: current == .agent) { vm.setMode(current == .agent ? .auto : .agent) }
+        ])
     }
 
     /// Shown only while Jarvis is speaking — tap to interrupt and start talking.
@@ -611,6 +613,267 @@ struct ContentView: View {
             .animation(.spring(duration: 0.25), value: vm.state)
             .onTapGesture { vm.toggleHandsFree() }
             .accessibilityLabel(vm.handsFree ? "Listening hands-free. Tap to pause." : "Listening paused. Tap to resume.")
+    }
+
+    // MARK: - Reply-mode toggle (Voice ↔ Text)
+
+    /// Segmented Voice/Text switch. Shown in both screens' headers; flips how Jarvis replies.
+    /// A frosted HUD control with a single glowing highlight that slides between segments.
+    private var voiceTextToggle: some View {
+        SegmentedHUD(items: [
+            .init(title: "Voice", icon: "waveform", tint: Color(uiColor: orbBlue),
+                  isActive: vm.replyMode == .voice) { vm.setReplyMode(.voice) },
+            .init(title: "Text", icon: "text.bubble", tint: Color(uiColor: orbBlue),
+                  isActive: vm.replyMode == .text) { vm.setReplyMode(.text) }
+        ])
+    }
+
+    // MARK: - Text-mode chat screen
+
+    /// The text UI: header + wordmark + Voice/Text toggle, a scrolling transcript, and a
+    /// glass composer pinned at the bottom. Matches the Jarvis palette (Travis's design).
+    private var textChatScreen: some View {
+        ZStack {
+            RadialGradient(colors: [Color(white: 0.06), .black],
+                           center: .center, startRadius: 5, endRadius: 500)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                chatHeader
+                chatTranscript
+                chatComposer
+            }
+        }
+    }
+
+    private var chatHeader: some View {
+        VStack(spacing: 10) {
+            Text("J.A.R.V.I.S")
+                .font(.system(size: 20, weight: .light, design: .rounded))
+                .tracking(6)
+                .foregroundStyle(.white.opacity(0.85))
+            Text(chatSubstatus)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .tracking(1.4)
+                .foregroundStyle(.white.opacity(0.4))
+            VStack(spacing: 8) {
+                voiceTextToggle
+                modeToggle
+            }
+        }
+        .padding(.top, 6)
+        .padding(.bottom, 12)
+    }
+
+    private var chatSubstatus: String {
+        if vm.connecting { return "TEXT MODE · CONNECTING…" }
+        if vm.state == .thinking { return "TEXT MODE · WORKING…" }
+        return "TEXT MODE · ONLINE"
+    }
+
+    private var chatTranscript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if vm.messages.isEmpty { emptyChatHint }
+                    ForEach(vm.messages) { msg in
+                        chatBubble(msg).id(msg.id)
+                    }
+                    if vm.state == .thinking {
+                        thinkingBubble.id("thinking")
+                            .transition(.opacity)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .onChange(of: vm.messages.count) { scrollToBottom(proxy) }
+            .onChange(of: vm.state) { scrollToBottom(proxy) }
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.2)) {
+            if vm.state == .thinking {
+                proxy.scrollTo("thinking", anchor: .bottom)
+            } else if let last = vm.messages.last {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
+        }
+    }
+
+    private func chatBubble(_ msg: ChatMessage) -> some View {
+        let isUser = msg.role == .user
+        return HStack(spacing: 0) {
+            if isUser { Spacer(minLength: 44) }
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+                Text(isUser ? "YOU" : "JARVIS")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(Color(uiColor: blueWhite).opacity(0.72))
+                Text(msg.text)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 11)
+            .background(chatBubbleBackground(isUser))
+            if !isUser { Spacer(minLength: 44) }
+        }
+    }
+
+    /// Jarvis = frosted glass with a faint blue border; user = soft-filled blue.
+    @ViewBuilder
+    private func chatBubbleBackground(_ isUser: Bool) -> some View {
+        if isUser {
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color(uiColor: orbBlue).opacity(0.16))
+                .overlay(RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color(uiColor: orbBlue).opacity(0.32), lineWidth: 1))
+        } else {
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color(uiColor: blueWhite).opacity(0.25), lineWidth: 1))
+        }
+    }
+
+    private var thinkingBubble: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                ThinkingDots(color: Color(uiColor: blueWhite))
+                Text(vm.statusText)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color(uiColor: blueWhite).opacity(0.85))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color(uiColor: blueWhite).opacity(0.25), lineWidth: 1))
+            Spacer(minLength: 44)
+        }
+    }
+
+    private var emptyChatHint: some View {
+        HStack {
+            Spacer()
+            Text("Type below and I'll reply here — no voice.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.4))
+                .multilineTextAlignment(.center)
+            Spacer()
+        }
+        .padding(.top, 44)
+    }
+
+    /// Glass composer pinned to the bottom of the text screen — photo, field, send.
+    private var chatComposer: some View {
+        HStack(spacing: 10) {
+            PhotosPicker(selection: $photoItem, matching: .images, photoLibrary: .shared()) {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color(uiColor: blueWhite).opacity(0.85))
+            }
+            .onChange(of: photoItem) { _, item in handlePickedPhoto(item) }
+
+            TextField("Message Jarvis…", text: $draft, axis: .vertical)
+                .lineLimit(1...5)
+                .foregroundStyle(.white)
+                .tint(Color(uiColor: blueWhite))
+                .focused($inputFocused)
+                .submitLabel(.send)
+                .onSubmit(sendChatDraft)
+
+            Button(action: sendChatDraft) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color(uiColor: orbBlue))
+            }
+            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color(uiColor: blueWhite).opacity(0.3), lineWidth: 1))
+        .padding(.horizontal, 12).padding(.bottom, 8)
+    }
+
+    private func sendChatDraft() {
+        let text = draft
+        draft = ""
+        vm.sendTyped(text)   // keep focus so you can keep typing
+    }
+}
+
+/// A refined frosted "HUD" segmented control: translucent capsule, hairline blue-white
+/// border, and a single glowing highlight that springs between segments (matchedGeometry).
+/// Used for both the Voice/Text and Chatbot/Agent switches so they read as one design language.
+struct SegmentedHUD: View {
+    struct Item: Identifiable {
+        let id = UUID()
+        let title: String
+        let icon: String?
+        let tint: Color
+        let isActive: Bool
+        let action: () -> Void
+    }
+
+    let items: [Item]
+    @Namespace private var ns
+    private let blueWhite = Color(red: 0.55, green: 0.80, blue: 1.00)
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items) { item in
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) { item.action() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if let icon = item.icon {
+                            Image(systemName: icon).font(.system(size: 10.5, weight: .semibold))
+                        }
+                        Text(item.title).font(.system(size: 12.5, weight: .semibold))
+                    }
+                    .foregroundStyle(item.isActive ? .white : .white.opacity(0.5))
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .frame(minWidth: 84)   // uniform segment width → the stacked bars align tidily
+                    .background {
+                        if item.isActive {
+                            Capsule()
+                                .fill(item.tint)
+                                .shadow(color: item.tint.opacity(0.55), radius: 9)
+                                .matchedGeometryEffect(id: "active", in: ns)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(item.title)\(item.isActive ? ", selected" : "")")
+            }
+        }
+        .padding(4)
+        .background(Capsule().fill(.ultraThinMaterial))
+        .overlay(Capsule().stroke(blueWhite.opacity(0.22), lineWidth: 1))
+    }
+}
+
+/// Three dots that cycle to signal Jarvis is thinking (text mode). Lightweight, timer-driven
+/// so there's no janky implicit animation to fight with the transcript's scroll.
+struct ThinkingDots: View {
+    let color: Color
+    @State private var phase = 0
+    private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                    .opacity(phase == i ? 1 : 0.3)
+            }
+        }
+        .onReceive(timer) { _ in phase = (phase + 1) % 3 }
     }
 }
 
