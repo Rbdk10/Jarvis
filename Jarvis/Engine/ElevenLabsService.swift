@@ -90,6 +90,12 @@ final class ElevenLabsService: NSObject, ObservableObject {
     /// a no-op if the fillers aren't cached yet. The real reply takes over when ready.
     func playFiller() {
         guard let url = fillerURLs.randomElement() else { return }
+        // Never stack voices. A filler marks a NEW intent, so it supersedes whatever is
+        // still playing — an earlier filler (two "one moment"s on top of each other) and
+        // any reply still being spoken from the previous turn. Without this you get two
+        // or three Jarvis voices talking at once.
+        stopMain()
+        stopFiller()
         do {
             try activatePlayback()
             let p = try AVAudioPlayer(contentsOf: url)
