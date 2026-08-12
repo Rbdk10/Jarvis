@@ -92,14 +92,17 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .onTapGesture { vm.tapToListen() }
 
-            // Always-available "stop listening" toggle (top-right). Mute me entirely —
-            // wake word and mic off — so a movie or background telly won't trigger me.
+            // Top chrome. Left: the Voice/Text mode icons (and the stop-sign while busy).
+            // Right: mute toggle + context gauge. Mute cuts the wake word and mic entirely
+            // so a movie or background telly won't trigger me.
             if !showInput {
                 VStack {
-                    HStack {
-                        if vm.state == .thinking || vm.connecting {
-                            stopSignButton.padding(.leading, 16).padding(.top, 10)
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            voiceTextIcons
+                            if vm.state == .thinking || vm.connecting { stopSignButton }
                         }
+                        .padding(.leading, 16).padding(.top, 10)
                         Spacer()
                         VStack(spacing: 10) {
                             muteButton
@@ -107,18 +110,6 @@ struct ContentView: View {
                         }
                         .padding(.trailing, 16).padding(.top, 10)
                     }
-                    Spacer()
-                }
-            }
-
-            // Mode switches at the very top: Voice/Text output on top, Chatbot/Agent routing below.
-            if !showInput {
-                VStack {
-                    VStack(spacing: 8) {
-                        voiceTextToggle
-                        modeToggle
-                    }
-                    .padding(.top, 10)
                     Spacer()
                 }
             }
@@ -518,19 +509,6 @@ struct ContentView: View {
         .stroke(Color(uiColor: orbAccent).opacity(0.22), lineWidth: 1.5)
     }
 
-    /// Two-button routing override. Lock the conversation to the Chatbot (instant, on-device)
-    /// or the Agent (the mini). Tap the lit one again to return to Auto (smart routing).
-    /// While a turn is in flight the highlight follows whoever's actually handling it.
-    private var modeToggle: some View {
-        let current = vm.activeHandler ?? vm.routeMode
-        return SegmentedHUD(items: [
-            .init(title: "Chatbot", icon: nil, tint: Color(uiColor: orbBlue),
-                  isActive: current == .chatbot) { vm.setMode(current == .chatbot ? .auto : .chatbot) },
-            .init(title: "Agent", icon: nil, tint: Color(uiColor: orbAmber),
-                  isActive: current == .agent) { vm.setMode(current == .agent ? .auto : .agent) }
-        ])
-    }
-
     /// Shown only while Jarvis is speaking — tap to interrupt and start talking.
     private var stopButton: some View {
         Circle()
@@ -615,17 +593,34 @@ struct ContentView: View {
             .accessibilityLabel(vm.handsFree ? "Listening hands-free. Tap to pause." : "Listening paused. Tap to resume.")
     }
 
-    // MARK: - Reply-mode toggle (Voice ↔ Text)
+    // MARK: - Reply-mode icons (Voice ↔ Text)
 
-    /// Segmented Voice/Text switch. Shown in both screens' headers; flips how Jarvis replies.
-    /// A frosted HUD control with a single glowing highlight that slides between segments.
-    private var voiceTextToggle: some View {
-        SegmentedHUD(items: [
-            .init(title: "Voice", icon: "waveform", tint: Color(uiColor: orbBlue),
-                  isActive: vm.replyMode == .voice) { vm.setReplyMode(.voice) },
-            .init(title: "Text", icon: "text.bubble", tint: Color(uiColor: orbBlue),
-                  isActive: vm.replyMode == .text) { vm.setReplyMode(.text) }
-        ])
+    /// Two compact icons pinned top-left in both screens — flip how Jarvis replies: spoken
+    /// (waveform) or on-screen text (bubble). The lit one is the active mode.
+    private var voiceTextIcons: some View {
+        HStack(spacing: 8) {
+            modeIcon(system: "waveform", label: "Voice",
+                     active: vm.replyMode == .voice) { vm.setReplyMode(.voice) }
+            modeIcon(system: "text.bubble", label: "Text",
+                     active: vm.replyMode == .text) { vm.setReplyMode(.text) }
+        }
+    }
+
+    private func modeIcon(system: String, label: String, active: Bool,
+                          action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { action() }
+        } label: {
+            Image(systemName: system)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(active ? .white : .white.opacity(0.45))
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(active ? Color(uiColor: orbBlue).opacity(0.85)
+                                                  : .white.opacity(0.06)))
+                .overlay(Circle().stroke((active ? Color(uiColor: orbBlue) : .white)
+                    .opacity(active ? 0.9 : 0.2), lineWidth: 1))
+        }
+        .accessibilityLabel(active ? "\(label) mode, selected" : "Switch to \(label.lowercased()) mode")
     }
 
     // MARK: - Text-mode chat screen
@@ -633,7 +628,7 @@ struct ContentView: View {
     /// The text UI: header + wordmark + Voice/Text toggle, a scrolling transcript, and a
     /// glass composer pinned at the bottom. Matches the Jarvis palette (Travis's design).
     private var textChatScreen: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             RadialGradient(colors: [Color(white: 0.06), .black],
                            center: .center, startRadius: 5, endRadius: 500)
                 .ignoresSafeArea()
@@ -643,6 +638,10 @@ struct ContentView: View {
                 chatTranscript
                 chatComposer
             }
+
+            // Same top-left mode icons as the voice screen.
+            voiceTextIcons
+                .padding(.leading, 16).padding(.top, 10)
         }
     }
 
@@ -656,10 +655,6 @@ struct ContentView: View {
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .tracking(1.4)
                 .foregroundStyle(.white.opacity(0.4))
-            VStack(spacing: 8) {
-                voiceTextToggle
-                modeToggle
-            }
         }
         .padding(.top, 6)
         .padding(.bottom, 12)
@@ -802,58 +797,6 @@ struct ContentView: View {
         let text = draft
         draft = ""
         vm.sendTyped(text)   // keep focus so you can keep typing
-    }
-}
-
-/// A refined frosted "HUD" segmented control: translucent capsule, hairline blue-white
-/// border, and a single glowing highlight that springs between segments (matchedGeometry).
-/// Used for both the Voice/Text and Chatbot/Agent switches so they read as one design language.
-struct SegmentedHUD: View {
-    struct Item: Identifiable {
-        let id = UUID()
-        let title: String
-        let icon: String?
-        let tint: Color
-        let isActive: Bool
-        let action: () -> Void
-    }
-
-    let items: [Item]
-    @Namespace private var ns
-    private let blueWhite = Color(red: 0.55, green: 0.80, blue: 1.00)
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(items) { item in
-                Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) { item.action() }
-                } label: {
-                    HStack(spacing: 6) {
-                        if let icon = item.icon {
-                            Image(systemName: icon).font(.system(size: 10.5, weight: .semibold))
-                        }
-                        Text(item.title).font(.system(size: 12.5, weight: .semibold))
-                    }
-                    .foregroundStyle(item.isActive ? .white : .white.opacity(0.5))
-                    .padding(.horizontal, 14).padding(.vertical, 7)
-                    .frame(minWidth: 84)   // uniform segment width → the stacked bars align tidily
-                    .background {
-                        if item.isActive {
-                            Capsule()
-                                .fill(item.tint)
-                                .shadow(color: item.tint.opacity(0.55), radius: 9)
-                                .matchedGeometryEffect(id: "active", in: ns)
-                        }
-                    }
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(item.title)\(item.isActive ? ", selected" : "")")
-            }
-        }
-        .padding(4)
-        .background(Capsule().fill(.ultraThinMaterial))
-        .overlay(Capsule().stroke(blueWhite.opacity(0.22), lineWidth: 1))
     }
 }
 

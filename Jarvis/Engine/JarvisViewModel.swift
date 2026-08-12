@@ -38,15 +38,11 @@ final class JarvisViewModel: ObservableObject {
     /// When true (default), Jarvis listens automatically. The button toggles this.
     @Published var handsFree: Bool = true
 
-    /// Manual routing override — the two top buttons. `.auto` is the normal smart routing;
-    /// `.chatbot` forces the fast brain to answer; `.agent` sends everything to the agent.
-    /// Starts on `.chatbot` so a fresh conversation talks to the instant on-device brain.
+    /// There's now a single agent. Every real utterance goes to it, with the fast brain riding
+    /// along as the live companion narrator — so the agent does the work while the chatbot
+    /// keeps you company. This just tags the in-flight turn for the activity trace + telemetry:
+    /// `.agent` for real work, `.chatbot` for the instant on-device presets; nil when idle.
     enum RouteMode { case auto, chatbot, agent }
-    @Published var routeMode: RouteMode = .chatbot
-
-    /// Who is actually handling the current turn (working/talking) — drives the live button
-    /// highlight. `.chatbot` or `.agent` while a turn is in flight; nil when idle (then the
-    /// highlight falls back to the locked `routeMode`).
     @Published var activeHandler: RouteMode?
 
     /// Set by the agent (over the socket) to open the projector on a public URL — e.g. when
@@ -56,15 +52,6 @@ final class JarvisViewModel: ObservableObject {
     /// Jarvis's context-window fullness, 0–100%, pushed live from the bridge. `nil` until the
     /// first report. As it climbs he slows down; tapping the on-screen gauge clears him.
     @Published var contextPct: Int?
-
-    func setMode(_ m: RouteMode) {
-        routeMode = m
-        switch m {
-        case .auto:    log("🔀 Auto-routing")
-        case .chatbot: log("🔵 Locked to Chatbot")
-        case .agent:   log("🟠 Locked to Agent")
-        }
-    }
 
     // MARK: Reply mode (voice ↔ text)
 
@@ -556,7 +543,6 @@ final class JarvisViewModel: ObservableObject {
     private func route(_ text: String) {
         stopCompanion()             // a new utterance ends any prior agent-turn narration
         speechGen &+= 1              // this is now the live intent; supersede any stale speak
-        let gen = speechGen
         state = .thinking
         statusText = "Thinking…"
         level = 0
@@ -590,84 +576,16 @@ final class JarvisViewModel: ObservableObject {
             return
         }
 
-        switch routeMode {
-        case .agent:
-            // Locked to the agent — skip the fast brain entirely (also free: no API call).
-            activeHandler = .agent
-            pendingRoute = (tier: "agent", model: nil, reason: "locked to agent", escalated: false)
-            log("🟠 → Agent (locked)")
-            statusText = "Working…"
-            beginAgentTurn(request: text)
-            socket.send(text: text)
-
-        case .chatbot:
-            // Locked to the chatbot — make the fast brain answer directly.
-            activeHandler = .chatbot
-            Task {
-                let say = await fastBrain.answer(text)
-                if fastBrain.isEnabled {
-                    log("💰 \(costMeter.lastCallText) this turn · \(costMeter.totalText) total")
-                }
-                guard gen == speechGen else { return }
-                if let say {
-                    pendingRoute = (tier: "fast", model: AppConfig.fastBrainModel, reason: "locked chatbot answered", escalated: false)
-                    log("🔵 Chatbot (locked)")
-                    deliver(say)
-                } else {
-                    // No key / over cap / call failed → fall back to the agent so you're never stuck.
-                    activeHandler = .agent
-                    pendingRoute = (tier: "agent", model: nil, reason: "chatbot unavailable → agent", escalated: true)
-                    log("→ Agent (chatbot unavailable)")
-                    statusText = "Working…"
-                    beginAgentTurn(request: text)
-                    socket.send(text: text)
-                }
-            }
-
-        case .auto:
-            // Tier 0 — obvious tasks / live-data go straight to the agent, skipping the
-            // fast-brain round-trip. Conservative: it only trades a little speed, never
-            // correctness (anything it misses is still escalated by the fast brain below).
-            if Router.looksLikeAgentTask(text) {
-                activeHandler = .agent
-                pendingRoute = (tier: "agent", model: nil, reason: "heuristic: task/live-data", escalated: false)
-                log("🧭 → Agent (heuristic: looks like a task)")
-                statusText = "Working…"
-                beginAgentTurn(request: text)
-                socket.send(text: text)
-                return
-            }
-
-            // If the spend cap has tripped, say so once — then everything quietly goes to the
-            // agent (chit-chat is no longer instant, but voice still works and no more spend).
-            if fastBrain.isOverSpendCap, !capNoticeLogged {
-                capNoticeLogged = true
-                log("⚠️ Fast-brain spend cap (\(CostMeter.money(AppConfig.fastBrainSpendCapUSD))) reached — chit-chat now routes to the agent. Voice still works; reset the meter to re-enable.")
-            }
-            Task {
-                let decision = await fastBrain.decide(text)
-                // Surface the spend so you can watch it against your credit (the fast brain is
-                // the only thing on the Anthropic key). No-op line when the brain is disabled.
-                if fastBrain.isEnabled {
-                    log("💰 \(costMeter.lastCallText) this turn · \(costMeter.totalText) total")
-                }
-                guard gen == speechGen else { return }   // interrupted/superseded while deciding
-                switch decision {
-                case .reply(let say):
-                    activeHandler = .chatbot
-                    pendingRoute = (tier: "fast", model: AppConfig.fastBrainModel, reason: "fast brain answered", escalated: false)
-                    log("⚡ Fast reply")
-                    deliver(say)
-                case .delegate:
-                    activeHandler = .agent
-                    pendingRoute = (tier: "agent", model: nil, reason: "fast brain escalated", escalated: true)
-                    log("→ Handing to the agent")
-                    statusText = "Working…"
-                    beginAgentTurn(request: text)   // instant acknowledgement → covers the agent round-trip
-                    socket.send(text: text)
-                }
-            }
-        }
+        // Single agent: every real utterance goes to the agent, and the fast brain rides along
+        // as the companion — an instant tailored opener, then paced narration grounded in the
+        // agent's live status — so it talks to you while the agent does the actual work, and
+        // the agent's final answer still lands as the real reply (see beginAgentTurn).
+        activeHandler = .agent
+        pendingRoute = (tier: "agent", model: nil, reason: "single agent", escalated: false)
+        log("🟠 → Agent")
+        statusText = "Working…"
+        beginAgentTurn(request: text)   // instant acknowledgement + companion narration
+        socket.send(text: text)
     }
 
     private func handleReply(_ text: String) {
