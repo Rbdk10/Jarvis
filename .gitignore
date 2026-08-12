@@ -21,3 +21,7 @@ fastlane/test_output/
 *.p8
 *.ipa
 *.dSYM.zip
+
+# Digest-sync service credentials (never commit)
+tools/.env.digest
+tools/digest.exclude

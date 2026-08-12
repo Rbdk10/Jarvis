@@ -13,6 +13,17 @@ struct JarvisArtifact: Identifiable, Equatable {
 /// WebSocket client to the Jarvis bridge. Text-only protocol:
 ///   send:    {"type":"message","text": "..."}
 ///   receive: {"type":"reply","text": "..."} / "status" / "error" / "artifact"
+///
+/// Reliability contract (why this class looks the way it does):
+///  • `status` is HONEST — it flips to `.connected` only when the socket truly opens
+///    (the `didOpenWithProtocol` delegate callback), never just because we called
+///    `resume()`. The UI and routing trust this, so it must not lie.
+///  • A dead tunnel FAILS FAST — a connect that doesn't open within `connectTimeout`
+///    is torn down and retried, instead of hanging on URLSession's minute-long default.
+///  • Nothing you say is lost while reconnecting — user messages queue in `outbox`
+///    (capped) and flush the moment the socket reopens.
+///  • Reconnect backoff actually backs off (reset only on a real open) and self-heals
+///    from send failures, ping failures, and app foregrounding.
 @MainActor
 final class JarvisSocket: NSObject, ObservableObject {
     enum Status { case disconnected, connecting, connected }
@@ -29,51 +40,80 @@ final class JarvisSocket: NSObject, ObservableObject {
     /// when it climbs, he slows down and it's time to clear him (see `reset()`).
     var onContext: ((Int) -> Void)?
 
-    private let session = URLSession(configuration: .default)
+    private var session: URLSession!
     private var task: URLSessionWebSocketTask?
     private var pingTimer: Timer?
+    private var openWatchdog: Task<Void, Never>?
     private var reconnectAttempt = 0
+    private var pendingReconnect = false
     private var shouldRun = false
+
+    /// User messages awaiting delivery (queued while disconnected, flushed on open).
+    /// Capped so a long outage can't build an unbounded backlog of stale utterances.
+    private var outbox: [String] = []
+    private let outboxCap = 20
+
+    private let connectTimeout: TimeInterval = 12
+
+    override init() {
+        super.init()
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = connectTimeout
+        cfg.waitsForConnectivity = false     // fail fast + reconnect ourselves, don't silently wait
+        session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+    }
+
+    // MARK: Lifecycle
 
     func connect() {
         shouldRun = true
         guard let url = AppConfig.socketURL else { onError?("Bad socket URL"); return }
+        // Tear down anything half-open before starting fresh.
+        openWatchdog?.cancel(); openWatchdog = nil
+        pingTimer?.invalidate(); pingTimer = nil
+        task?.cancel(with: .goingAway, reason: nil)
+
         status = .connecting
         let t = session.webSocketTask(with: url)
         task = t
         t.resume()
         receive()
-        startPing()
-        status = .connected
-        reconnectAttempt = 0
+        startOpenWatchdog()
+        // IMPORTANT: do NOT set `.connected` here — wait for `didOpenWithProtocol`.
     }
 
     func disconnect() {
         shouldRun = false
+        pendingReconnect = false
+        openWatchdog?.cancel(); openWatchdog = nil
         pingTimer?.invalidate(); pingTimer = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         status = .disconnected
     }
 
-    func send(text: String) {
-        let payload: [String: Any] = ["type": "message", "text": text]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let str = String(data: data, encoding: .utf8) else { return }
-        task?.send(.string(str)) { [weak self] err in
-            if let err { Task { @MainActor in self?.onError?(err.localizedDescription) } }
+    /// App returned to the foreground. iOS suspends the socket while backgrounded, so the
+    /// connection is often silently dead on return even though `status` still reads
+    /// `.connected`. Re-establish immediately if not connected; otherwise probe liveness
+    /// with a ping and reconnect if it fails. This is a top cause of "I open it and he's dead".
+    func foreground() {
+        guard shouldRun else { return }
+        if status != .connected {
+            reconnectAttempt = 0        // user is back — retry now, not on a long backoff
+            pendingReconnect = false
+            connect()
+        } else {
+            task?.sendPing { [weak self] err in
+                guard err != nil else { return }
+                Task { @MainActor in self?.handleDrop("stale connection after foreground") }
+            }
         }
     }
 
-    /// Reply to the bridge's application-level heartbeat so it keeps the socket open.
-    private func sendPong() {
-        task?.send(.string(#"{"type":"pong"}"#)) { _ in }
-    }
+    // MARK: Sending
 
-    /// Ask the bridge to clear Jarvis's working memory — it runs `/clear` on the session
-    /// (instant, keeps him warm), so he's fast again once his context has filled up.
-    func reset() {
-        task?.send(.string(#"{"type":"reset"}"#)) { _ in }
+    func send(text: String) {
+        enqueueUserFrame(jsonString(["type": "message", "text": text]))
     }
 
     /// Send a photo to Jarvis. The bridge decodes `base64` (a JPEG), saves it, and hands
@@ -81,12 +121,60 @@ final class JarvisSocket: NSObject, ObservableObject {
     func sendImage(base64: String, caption: String?) {
         var payload: [String: Any] = ["type": "image_message", "data": base64]
         if let caption, !caption.isEmpty { payload["caption"] = caption }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let str = String(data: data, encoding: .utf8) else { return }
-        task?.send(.string(str)) { [weak self] err in
-            if let err { Task { @MainActor in self?.onError?(err.localizedDescription) } }
+        enqueueUserFrame(jsonString(payload))
+    }
+
+    /// Queue-and-send a user-visible frame: delivered now if connected, otherwise buffered
+    /// and flushed on reconnect so a message spoken during a blip is never silently dropped.
+    private func enqueueUserFrame(_ str: String?) {
+        guard let str else { return }
+        guard status == .connected, let task else {
+            queue(str)
+            ensureConnecting()
+            return
+        }
+        task.send(.string(str)) { [weak self] err in
+            guard let err else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                self.queue(str)                       // put it back; deliver on reconnect
+                self.onError?(err.localizedDescription)
+                self.handleDrop("send failed")
+            }
         }
     }
+
+    private func queue(_ str: String) {
+        outbox.append(str)
+        if outbox.count > outboxCap { outbox.removeFirst(outbox.count - outboxCap) }
+    }
+
+    private func flushOutbox() {
+        guard status == .connected, let task, !outbox.isEmpty else { return }
+        let pending = outbox
+        outbox.removeAll()
+        for str in pending {
+            task.send(.string(str)) { [weak self] err in
+                guard let err else { return }
+                Task { @MainActor in
+                    self?.queue(str)
+                    self?.handleDrop(err.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Best-effort control frames — NOT queued (replaying a stale pong/reset is meaningless).
+    private func sendControl(_ str: String) { task?.send(.string(str)) { _ in } }
+
+    /// Reply to the bridge's application-level heartbeat so it keeps the socket open.
+    private func sendPong() { sendControl(#"{"type":"pong"}"#) }
+
+    /// Ask the bridge to clear Jarvis's working memory — it runs `/clear` on the session
+    /// (instant, keeps him warm), so he's fast again once his context has filled up.
+    func reset() { sendControl(#"{"type":"reset"}"#) }
+
+    // MARK: Receiving
 
     private func receive() {
         task?.receive { [weak self] result in
@@ -133,22 +221,99 @@ final class JarvisSocket: NSObject, ObservableObject {
         }
     }
 
+    // MARK: Keep-alive + reconnect
+
     private func startPing() {
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            self?.task?.sendPing { _ in }
+            Task { @MainActor in
+                guard let self else { return }
+                self.task?.sendPing { err in
+                    guard err != nil else { return }
+                    Task { @MainActor in self.handleDrop("keep-alive ping failed") }
+                }
+            }
         }
     }
 
+    /// If a connect attempt doesn't actually open within `connectTimeout`, treat it as a
+    /// failed attempt and back off — instead of sitting in `.connecting` forever.
+    private func startOpenWatchdog() {
+        openWatchdog?.cancel()
+        let timeout = connectTimeout
+        openWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.status == .connecting else { return }
+            self.task?.cancel(with: .goingAway, reason: nil)
+            self.handleDrop("connect timed out")
+        }
+    }
+
+    private func handleOpen() {
+        openWatchdog?.cancel(); openWatchdog = nil
+        reconnectAttempt = 0        // real open — only NOW is it safe to reset the backoff
+        pendingReconnect = false
+        status = .connected
+        startPing()
+        flushOutbox()               // deliver anything said during the outage
+    }
+
     private func handleDrop(_ reason: String) {
-        status = .disconnected
+        openWatchdog?.cancel(); openWatchdog = nil
         pingTimer?.invalidate(); pingTimer = nil
+        task = nil
+        status = .disconnected
         guard shouldRun else { return }
+        scheduleReconnect()
+    }
+
+    /// Kick a reconnect if we're meant to be running but aren't connected and none is pending.
+    private func ensureConnecting() {
+        guard shouldRun, status == .disconnected else { return }
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        guard shouldRun, !pendingReconnect else { return }
+        pendingReconnect = true
         reconnectAttempt += 1
-        let delay = min(pow(2.0, Double(reconnectAttempt)), 15)
+        let base = min(pow(2.0, Double(reconnectAttempt)), 15)   // 2,4,8,15,15… seconds
+        let delay = min(base + Double.random(in: 0...0.4) * base, 20)   // + jitter to avoid lockstep
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.shouldRun else { return }
+            guard let self else { return }
+            self.pendingReconnect = false
+            guard self.shouldRun, self.status != .connected else { return }
             self.connect()
+        }
+    }
+
+    // MARK: Helpers
+
+    private func jsonString(_ obj: [String: Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+// MARK: - URLSessionWebSocketDelegate (honest connected/disconnected signals)
+
+extension JarvisSocket: URLSessionWebSocketDelegate {
+    nonisolated func urlSession(_ session: URLSession,
+                                webSocketTask: URLSessionWebSocketTask,
+                                didOpenWithProtocol proto: String?) {
+        Task { @MainActor [weak self] in
+            guard let self, webSocketTask === self.task else { return }
+            self.handleOpen()
+        }
+    }
+
+    nonisolated func urlSession(_ session: URLSession,
+                                webSocketTask: URLSessionWebSocketTask,
+                                didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+                                reason: Data?) {
+        Task { @MainActor [weak self] in
+            guard let self, webSocketTask === self.task else { return }
+            self.handleDrop("socket closed (\(closeCode.rawValue))")
         }
     }
 }

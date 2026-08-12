@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S — Text Mode (design reference)</title>
+<style>
+  :root{
+    /* --- Jarvis palette (the ONLY colours) --- */
+    --bg-core:#0F0F0F;
+    --bg-edge:#000000;
+    --blue-white:#8CCCFF;   /* primary accent / chrome */
+    --orb-blue:#4DA8FF;     /* jarvis / user bubble */
+    --amber:#FF8C26;        /* speaking / agent only */
+    --t-strong:rgba(255,255,255,.85);
+    --t-mid:rgba(255,255,255,.5);
+    --t-faint:rgba(255,255,255,.4);
+    --glass:rgba(255,255,255,.06);
+    --glass-line:rgba(140,204,255,.25);
+    --font-round:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Segoe UI",system-ui,sans-serif;
+    --font-mono:ui-monospace,"SF Mono",Menlo,monospace;
+  }
+
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:var(--font-round);
+    background:#050505;
+    color:var(--t-strong);
+    display:flex;align-items:center;justify-content:center;
+    min-height:100vh;padding:24px;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---- phone frame (reference only; not part of the native spec) ---- */
+  .phone{
+    position:relative;width:390px;height:844px;
+    border-radius:52px;padding:12px;
+    background:linear-gradient(160deg,#1b1b1d,#050506);
+    box-shadow:0 40px 120px -20px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.05);
+  }
+  .screen{
+    position:relative;width:100%;height:100%;
+    border-radius:42px;overflow:hidden;
+    background:radial-gradient(120% 90% at 50% 22%,var(--bg-core) 0%,var(--bg-edge) 72%);
+    display:flex;flex-direction:column;
+    isolation:isolate;
+  }
+
+  /* faint orb glow bleeding from behind the header */
+  .screen::before{
+    content:"";position:absolute;top:-120px;left:50%;translate:-50% 0;
+    width:340px;height:340px;border-radius:50%;
+    background:radial-gradient(circle,rgba(77,168,255,.22),transparent 62%);
+    filter:blur(8px);z-index:0;pointer-events:none;
+    animation:breathe 7s ease-in-out infinite;
+  }
+  @keyframes breathe{0%,100%{opacity:.7;transform:scale(1)}50%{opacity:1;transform:scale(1.06)}}
+
+  /* faint hud rings, echoing the voice screen */
+  .rings{position:absolute;inset:0;z-index:0;pointer-events:none;opacity:.5}
+  .rings i{
+    position:absolute;top:120px;left:50%;translate:-50% -50%;
+    border-radius:50%;border:1px solid rgba(140,204,255,.12);
+  }
+  .rings i:nth-child(1){width:150px;height:150px}
+  .rings i:nth-child(2){width:172px;height:172px;border-style:dashed;opacity:.7}
+
+  /* ---------- header ---------- */
+  header{
+    position:relative;z-index:2;
+    padding:16px 18px 12px;text-align:center;
+  }
+  .wordmark{
+    font-size:22px;font-weight:300;letter-spacing:.34em;
+    color:var(--t-strong);padding-left:.34em;
+  }
+  .substatus{
+    font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;
+    color:var(--t-faint);margin-top:6px;text-transform:uppercase;
+  }
+
+  /* voice / text segmented toggle */
+  .modeToggle{
+    display:inline-flex;gap:4px;margin-top:14px;padding:3px;
+    background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12);
+    border-radius:999px;backdrop-filter:blur(8px);
+  }
+  .modeToggle button{
+    font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+    color:var(--t-mid);background:transparent;border:0;
+    padding:7px 20px;border-radius:999px;letter-spacing:.02em;
+    display:flex;align-items:center;gap:6px;
+    transition:color .25s ease,background .25s ease;
+  }
+  .modeToggle button svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8}
+  .modeToggle button[aria-selected="true"]{
+    color:#fff;background:rgba(77,168,255,.9);
+    box-shadow:0 0 0 1px rgba(140,204,255,.4),0 0 18px -2px rgba(77,168,255,.6);
+    animation:pillglow 3.4s ease-in-out infinite;
+  }
+  @keyframes pillglow{0%,100%{box-shadow:0 0 0 1px rgba(140,204,255,.4),0 0 14px -2px rgba(77,168,255,.5)}50%{box-shadow:0 0 0 1px rgba(140,204,255,.55),0 0 22px 0 rgba(77,168,255,.75)}}
+
+  /* ---------- transcript ---------- */
+  .thread{
+    position:relative;z-index:2;flex:1;overflow-y:auto;
+    padding:14px 16px 8px;display:flex;flex-direction:column;gap:14px;
+    scrollbar-width:none;
+  }
+  .thread::-webkit-scrollbar{display:none}
+
+  .daybreak{
+    align-self:center;font-family:var(--font-mono);font-size:10px;
+    letter-spacing:.14em;color:var(--t-faint);text-transform:uppercase;
+    padding:2px 0 4px;
+  }
+
+  .row{display:flex;max-width:100%;animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
+  .row.j{justify-content:flex-start}
+  .row.u{justify-content:flex-end}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  .bubble{
+    max-width:78%;padding:11px 14px;font-size:14.5px;line-height:1.45;
+    border-radius:18px;position:relative;
+  }
+  .bubble .who{
+    font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+    text-transform:uppercase;margin-bottom:4px;color:var(--t-faint);
+  }
+  /* Jarvis = glass with faint blue border */
+  .row.j .bubble{
+    background:var(--glass);border:1px solid var(--glass-line);
+    border-bottom-left-radius:6px;color:var(--t-strong);
+    backdrop-filter:blur(14px);
+  }
+  .row.j .bubble .who{color:rgba(140,204,255,.75)}
+  /* User = soft filled blue */
+  .row.u .bubble{
+    background:rgba(77,168,255,.16);border:1px solid rgba(77,168,255,.32);
+    border-bottom-right-radius:6px;color:#fff;
+  }
+  .row.u .bubble .who{color:rgba(140,204,255,.7);text-align:right}
+
+  /* an artifact/attachment chip inside a jarvis bubble */
+  .chip{
+    margin-top:9px;display:flex;align-items:center;gap:9px;
+    padding:9px 11px;border-radius:12px;
+    background:rgba(255,255,255,.05);border:1px solid rgba(140,204,255,.2);
+  }
+  .chip svg{width:17px;height:17px;stroke:var(--blue-white);fill:none;stroke-width:1.6;flex:none}
+  .chip .n{font-size:13px;color:#fff}
+  .chip .k{font-size:10px;color:var(--t-faint);font-family:var(--font-mono)}
+  .chip .go{margin-left:auto;color:var(--t-faint);font-size:14px}
+
+  /* thinking indicator (jarvis, left) */
+  .thinking{display:flex;align-items:center;gap:8px;padding:12px 15px}
+  .thinking .dots{display:flex;gap:5px}
+  .thinking .dots span{
+    width:7px;height:7px;border-radius:50%;background:var(--blue-white);
+    opacity:.35;animation:blip 1.3s infinite ease-in-out;
+  }
+  .thinking .dots span:nth-child(2){animation-delay:.18s}
+  .thinking .dots span:nth-child(3){animation-delay:.36s}
+  @keyframes blip{0%,80%,100%{opacity:.3;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+  .thinking .lbl{font-family:var(--font-mono);font-size:11px;color:rgba(140,204,255,.85);letter-spacing:.06em}
+
+  /* ---------- input bar ---------- */
+  .composer{
+    position:relative;z-index:2;margin:6px 12px 16px;
+    display:flex;align-items:center;gap:10px;
+    padding:9px 10px 9px 14px;border-radius:20px;
+    background:var(--glass);border:1px solid rgba(140,204,255,.3);
+    backdrop-filter:blur(18px);
+  }
+  .composer .icon{
+    background:transparent;border:0;cursor:pointer;display:flex;flex:none;
+    color:rgba(140,204,255,.85);padding:2px;
+  }
+  .composer .icon svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.7}
+  .composer input{
+    flex:1;background:transparent;border:0;outline:0;color:#fff;font:inherit;font-size:15px;
+  }
+  .composer input::placeholder{color:var(--t-faint)}
+  .send{
+    width:34px;height:34px;border-radius:50%;flex:none;cursor:pointer;border:0;
+    background:var(--orb-blue);display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 16px -3px rgba(77,168,255,.8);
+    transition:transform .15s ease;
+  }
+  .send:active{transform:scale(.9)}
+  .send svg{width:19px;height:19px;stroke:#fff;fill:none;stroke-width:2.2}
+
+  .home-indicator{position:absolute;bottom:9px;left:50%;translate:-50% 0;width:130px;height:5px;border-radius:3px;background:rgba(255,255,255,.25);z-index:5}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important}
+  }
+  /* it's a dark product screen; keep it dark in light mode too, on purpose */
+</style>
+</head>
+<body>
+  <div class="phone">
+    <div class="screen">
+      <div class="rings"><i></i><i></i></div>
+
+      <header>
+        <div class="wordmark">J.A.R.V.I.S</div>
+        <div class="substatus">Text mode · online</div>
+        <div class="modeToggle" role="tablist" aria-label="Reply mode">
+          <button role="tab" aria-selected="false">
+            <svg viewBox="0 0 24 24"><path d="M12 3v10m0 0a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v4a3 3 0 0 0 3 3Zm-6 0a6 6 0 0 0 12 0M12 16v4"/></svg>
+            Voice
+          </button>
+          <button role="tab" aria-selected="true">
+            <svg viewBox="0 0 24 24"><path d="M4 5h16M4 10h16M4 15h10"/></svg>
+            Text
+          </button>
+        </div>
+      </header>
+
+      <div class="thread" id="thread">
+        <div class="daybreak">Today</div>
+
+        <div class="row u" style="animation-delay:.02s">
+          <div class="bubble"><div class="who">You</div>What's on my plate this morning?</div>
+        </div>
+
+        <div class="row j" style="animation-delay:.12s">
+          <div class="bubble"><div class="who">Jarvis</div>Good morning, sir. Three things: the deploy on Slim finished clean, you've two unread from the design list, and standup moved to 10:30.</div>
+        </div>
+
+        <div class="row u" style="animation-delay:.2s">
+          <div class="bubble"><div class="who">You</div>Draft me the standup note.</div>
+        </div>
+
+        <div class="row j" style="animation-delay:.28s">
+          <div class="bubble">
+            <div class="who">Jarvis</div>Done — kept it to three bullets. Have a look and I'll send it on your word.
+            <div class="chip">
+              <svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z"/><path d="M14 2v6h6"/></svg>
+              <div><div class="n">standup-note.md</div><div class="k">TEXT</div></div>
+              <div class="go">›</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row u" style="animation-delay:.36s">
+          <div class="bubble"><div class="who">You</div>Perfect. What's the weather like for the ride home?</div>
+        </div>
+
+        <div class="row j" id="lastJ" style="animation-delay:.44s">
+          <div class="bubble thinking">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <div class="lbl">thinking…</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <button class="icon" aria-label="Attach photo">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="M4 17l5-5 4 4 3-3 4 4"/></svg>
+        </button>
+        <input type="text" placeholder="Message Jarvis…" aria-label="Message">
+        <button class="send" aria-label="Send">
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+      </div>
+
+      <div class="home-indicator"></div>
+    </div>
+  </div>
+
+  <script>
+    // Reference-only interactivity so the mockup "feels" right:
+    // swap the thinking bubble for a real reply after a beat, and echo typed messages.
+    const thread = document.getElementById('thread');
+    const input = document.querySelector('.composer input');
+    const send = document.querySelector('.send');
+
+    function addRow(kind, who, text){
+      const row = document.createElement('div');
+      row.className = 'row ' + (kind === 'u' ? 'u' : 'j');
+      row.innerHTML = '<div class="bubble"><div class="who">'+who+'</div>'+text+'</div>';
+      thread.appendChild(row);
+      thread.scrollTop = thread.scrollHeight;
+      return row;
+    }
+
+    // Resolve the initial "thinking" bubble into an answer.
+    setTimeout(() => {
+      const lastJ = document.getElementById('lastJ');
+      if (lastJ) lastJ.querySelector('.bubble').outerHTML =
+        '<div class="bubble"><div class="who">Jarvis</div>Clear and 14°, sir — a light easterly. You\'ll want the lighter jacket, not the shell.</div>';
+      thread.scrollTop = thread.scrollHeight;
+    }, 2200);
+
+    function fire(){
+      const v = input.value.trim();
+      if(!v) return;
+      addRow('u','You', v.replace(/</g,'&lt;'));
+      input.value='';
+      const t = addRow('j','Jarvis','<span class="thinking" style="padding:0;display:inline-flex"><span class="dots"><span></span><span></span><span></span></span></span>');
+      setTimeout(()=>{
+        t.querySelector('.bubble').innerHTML='<div class="who">Jarvis</div>On it, sir.';
+        thread.scrollTop = thread.scrollHeight;
+      }, 1400);
+    }
+    send.addEventListener('click', fire);
+    input.addEventListener('keydown', e => { if(e.key==='Enter') fire(); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jarvis.digest-sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/reubendeklerk/Dev/jarvis-app/tools/sync_digest.py</string>
+  </array>
+
+  <!-- Refresh the project digest every morning at 06:30 -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>6</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/jarvis-digest-sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/jarvis-digest-sync.err</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

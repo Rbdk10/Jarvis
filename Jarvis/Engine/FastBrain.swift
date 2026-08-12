@@ -34,6 +34,39 @@ final class FastBrain {
     let meter: CostMeter
     init(meter: CostMeter) { self.meter = meter }
 
+    /// The user's world, loaded from Supabase (the `state` digest). Empty until
+    /// `refreshDigest()` runs; when present it's injected into the cached system
+    /// block so the fast brain can talk about real things instead of guessing.
+    private var digest = ""
+
+    /// Pull the latest digest from Supabase. Safe to call repeatedly (e.g. on
+    /// launch and after a long gap). Fails soft — leaves `digest` unchanged on error.
+    func refreshDigest() async {
+        let rows = await SupabaseService.fetchDigest()
+        let text = SupabaseService.digestText(from: rows)
+        if !text.isEmpty { digest = text }
+    }
+
+    /// Build the system block: base persona + the project digest + a grounding
+    /// guardrail. The digest lives in the CACHED prefix, so once it grows past
+    /// Haiku's cache floor it's cheap and low-latency on every call.
+    private func groundedSystem(_ base: String) -> [[String: Any]] {
+        var text = base
+        if !digest.isEmpty {
+            text += """
+
+
+            ## What you actually know about the user's world (ground truth — use it)
+            \(digest)
+
+            Answer questions about the user's world ONLY from the context above. If the \
+            answer isn't there, or the request needs live data, files, or an action, do \
+            NOT guess — route it to the agent (\"task\"). Being fast is worthless if you're wrong.
+            """
+        }
+        return [["type": "text", "text": text, "cache_control": ["type": "ephemeral"]]]
+    }
+
     private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
 
     /// Rolling [{role, content}] memory of the spoken conversation (chat turns + a note
@@ -97,8 +130,7 @@ final class FastBrain {
             // prefixes ≥ 4096 tokens, and ours is far shorter — so this is a no-op today
             // (you'll see cache tokens stay 0 in the meter). It costs nothing and starts
             // saving automatically if Jarvis's persona/rules ever grow past that floor.
-            "system": [["type": "text", "text": systemPrompt,
-                        "cache_control": ["type": "ephemeral"]]],
+            "system": groundedSystem(systemPrompt),
             "messages": messages
         ]
 
@@ -135,8 +167,7 @@ final class FastBrain {
             "model": AppConfig.fastBrainModel,
             "max_tokens": 300,
             "temperature": 0.6,
-            "system": [["type": "text", "text": answerPrompt,
-                        "cache_control": ["type": "ephemeral"]]],
+            "system": groundedSystem(answerPrompt),
             "messages": messages
         ]
 
@@ -148,6 +179,67 @@ final class FastBrain {
         history.append(["role": "assistant", "content": say])
         trimHistory()
         return say
+    }
+
+    // MARK: - Companion overlay (narrate the agent's work while it runs)
+
+    /// Instant, tailored acknowledgement spoken the moment a turn is handed to the agent —
+    /// replaces the canned filler with a line specific to the request. Short + spoken.
+    /// Kept out of `history` so the chit-chat memory isn't polluted by narration.
+    func opener(_ request: String) async -> String? {
+        guard isEnabled else { return nil }
+        let system = """
+        You are Jarvis, speaking aloud. Your agent is about to carry out the user's request. \
+        In ONE short spoken line — dry, unflappable, lightly British, "sir" occasionally — \
+        acknowledge it and signal you're starting (e.g. "Right, on it now, sir."). Do NOT \
+        answer the request or imply it's done; the agent is doing the work. No markdown, no \
+        emoji. Under 12 words.
+        """
+        let body: [String: Any] = [
+            "model": AppConfig.fastBrainModel,
+            "max_tokens": 40,
+            "temperature": 0.7,
+            "system": [["type": "text", "text": system]],
+            "messages": [["role": "user", "content": "Request: \"\(request)\""]]
+        ]
+        guard let text = await send(body) else { return nil }
+        let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.isEmpty ? nil : line
+    }
+
+    /// One short, natural progress update grounded in the agent's live status — spoken to keep
+    /// the user company while the agent works. Returns nil/empty when there's nothing new to say.
+    func narrate(request: String, status: [String], alreadySaid: [String]) async -> String? {
+        guard isEnabled else { return nil }
+        let statusText = status.isEmpty ? "(no detail yet)" : status.suffix(12).joined(separator: "\n")
+        let saidText = alreadySaid.isEmpty ? "(nothing yet)" : alreadySaid.suffix(6).joined(separator: "\n")
+        let system = """
+        You are Jarvis, keeping the user company aloud while your agent does the work. Given \
+        what the user asked and the agent's progress notes, say ONE short spoken line (dry, \
+        unflappable, lightly British, under 15 words) updating them. Rules: report ONLY what \
+        the notes show; never invent progress; never say it's finished or give the final \
+        result — the agent delivers that; do NOT repeat anything you've already said. If there \
+        is nothing new worth saying, reply with an empty string and nothing else.
+        """
+        let user = """
+        User asked: "\(request)"
+
+        Agent progress notes:
+        \(statusText)
+
+        You've already said:
+        \(saidText)
+        """
+        let body: [String: Any] = [
+            "model": AppConfig.fastBrainModel,
+            "max_tokens": 40,
+            "temperature": 0.6,
+            "system": [["type": "text", "text": system]],
+            "messages": [["role": "user", "content": user]]
+        ]
+        guard let text = await send(body) else { return nil }
+        let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.isEmpty ? nil : line
     }
 
     private func trimHistory() {
