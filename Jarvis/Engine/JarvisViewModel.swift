@@ -737,16 +737,16 @@ final class JarvisViewModel: ObservableObject {
         statusBuffer.removeAll(); narrationSaid.removeAll()
     }
 
-    /// Phase B — the agent pushed a precise progress line ({"type":"say"}). This takes over from
-    /// the app's guesswork: the auto-narrator yields for the rest of the turn and we voice the
-    /// agent's own words. Voice mode + an active agent turn only; ignored otherwise.
+    /// Interim agent narration ({"type":"say"}) is now IGNORED. Keeping the user updated is the
+    /// chatbot companion's job alone — when the agent also narrated (old Phase B), the app's
+    /// narrator yielded to it, which (a) made the chatbot go quiet and (b) doubled up, so Jarvis
+    /// said more or less the same thing twice. The agent should only ever emit a final
+    /// `jarvis_reply` (+ `jarvis_ask` for questions); any stray `say` is dropped here so it can
+    /// never talk over or duplicate the companion.
     private func handleAgentSay(_ text: String) {
         let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !line.isEmpty, replyMode == .voice, agentBusy else { return }
-        agentDirectedNarration = true       // the agent is driving the narration now
-        narrationSaid.append(line)
-        log("🗣️ (agent) \(line)")
-        Task { await speakCompanion(line) }
+        guard !line.isEmpty else { return }
+        log("🔇 Ignored agent say (companion narrates): \(line)")
     }
 
     /// The agent hit a fork it won't assume its way past and asked a question ({"type":"ask"}).
