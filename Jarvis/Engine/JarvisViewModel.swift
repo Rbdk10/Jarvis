@@ -177,6 +177,8 @@ final class JarvisViewModel: ObservableObject {
     private var narrationSaid: [String] = []// what the companion has already spoken (avoid repeats)
     private var narrationTask: Task<Void, Never>?   // the paced narration loop
     private var lastNarration = Date.distantPast    // gates the "quiet worker" reassurance
+    private var agentDirectedNarration = false      // Phase B: once the agent pushes a `say`, it's
+                                                    // driving the narration — the auto-narrator yields.
 
     init() {
         wake.onWake = { [weak self] in self?.onWake() }
@@ -185,6 +187,7 @@ final class JarvisViewModel: ObservableObject {
         socket.onArtifact = { [weak self] art in self?.artifacts.append(art) }
         socket.onOpenURL = { [weak self] url in self?.previewRequest = url }
         socket.onContext = { [weak self] pct in self?.contextPct = pct }
+        socket.onSay = { [weak self] text in self?.handleAgentSay(text) }
         socket.onStatus = { [weak self] label in
             guard let self else { return }
             // Live "what I'm doing" feed — only meaningful while thinking.
@@ -707,6 +710,7 @@ final class JarvisViewModel: ObservableObject {
         guard replyMode == .voice else { return }   // text mode (Phase A): silent thinking indicator
         guard fastBrain.isEnabled else { voice.playFiller(); return }
         agentTurnActive = true
+        agentDirectedNarration = false
         companionRequest = request
         statusBuffer.removeAll()
         narrationSaid.removeAll()
@@ -741,6 +745,7 @@ final class JarvisViewModel: ObservableObject {
 
     private func narrateTick() async {
         guard agentTurnActive, state == .thinking, fastBrain.isEnabled else { return }
+        guard !agentDirectedNarration else { return }   // the agent is narrating itself — stay out of its way
         if !statusBuffer.isEmpty {
             let line = await fastBrain.narrate(request: companionRequest,
                                                status: statusBuffer, alreadySaid: narrationSaid)
@@ -763,6 +768,7 @@ final class JarvisViewModel: ObservableObject {
         guard agentTurnActive else { return }
         speechGen &+= 1
         let gen = speechGen
+        voice.stop()          // cut any prior companion audio so lines never overlap
         armed = false; heardSpeech = false; recorder.stop()   // mic closed while speaking
         speakingText = line
         state = .speaking
@@ -780,10 +786,23 @@ final class JarvisViewModel: ObservableObject {
     private func stopCompanion() {
         guard agentTurnActive else { return }
         agentTurnActive = false
+        agentDirectedNarration = false
         narrationTask?.cancel(); narrationTask = nil
         speechGen &+= 1        // supersede any in-flight narration speak
         voice.stop()           // cut narration audio so the real answer can take over
         statusBuffer.removeAll(); narrationSaid.removeAll()
+    }
+
+    /// Phase B — the agent pushed a precise progress line ({"type":"say"}). This takes over from
+    /// the app's guesswork: the auto-narrator yields for the rest of the turn and we voice the
+    /// agent's own words. Voice mode + an active agent turn only; ignored otherwise.
+    private func handleAgentSay(_ text: String) {
+        let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty, replyMode == .voice, agentTurnActive else { return }
+        agentDirectedNarration = true       // the agent is driving the narration now
+        narrationSaid.append(line)
+        log("🗣️ (agent) \(line)")
+        Task { await speakCompanion(line) }
     }
 
     /// Speak a reply we already have in hand — from the agent (handleReply) or the fast

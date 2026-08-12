@@ -39,6 +39,10 @@ final class JarvisSocket: NSObject, ObservableObject {
     /// live token usage and pushes {"type":"context","pct":N}. Drives the on-screen gauge;
     /// when it climbs, he slows down and it's time to clear him (see `reset()`).
     var onContext: ((Int) -> Void)?
+    /// Agent-directed narration (companion Phase B): the agent pushes a precise, first-person
+    /// progress line to speak *now* while it keeps working — {"type":"say","text":"…"}. Unlike
+    /// `reply` (the final answer, which ends the turn), a `say` is an interim update.
+    var onSay: ((String) -> Void)?
 
     private var session: URLSession!
     private var task: URLSessionWebSocketTask?
@@ -201,6 +205,8 @@ final class JarvisSocket: NSObject, ObservableObject {
               let type = obj["type"] as? String else { return }
         switch type {
         case "reply":  if let text = obj["text"] as? String { onReply?(text) }
+        // Interim agent-directed narration (companion) — speak now, keep working.
+        case "say":    if let text = obj["text"] as? String { onSay?(text) }
         // The bridge sends application-level {"type":"ping"} heartbeats every ~10s and
         // closes the socket ("no pong") if it doesn't get a {"type":"pong"} back within
         // ~30s. (These are JSON frames, distinct from the WS control-frame ping in
