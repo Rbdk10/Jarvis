@@ -158,7 +158,11 @@ final class JarvisViewModel: ObservableObject {
     // instant tailored opener, then paced spoken updates grounded in the agent's live status
     // stream — so there's never dead air, and the final agent answer still lands as the real
     // reply. Voice mode only; falls back to the canned filler when the fast brain is off.
-    private var agentTurnActive = false     // true from hand-off until the agent replies / cancel
+    private var agentTurnActive = false     // companion narration overlay is running (voice + fast brain)
+    private var agentBusy = false           // an agent turn is in flight — true in EVERY mode (text too),
+                                            // and whether or not the companion is narrating. Gates `ask`/`say`.
+    private var awaitingAgentAnswer = false // Jarvis asked a question and is waiting; the next utterance is
+                                            // the ANSWER — fed straight back into the same turn, not a new one.
     private var companionRequest = ""       // the utterance the agent is working on (context for narration)
     private var statusBuffer: [String] = [] // recent agent status lines to narrate from
     private var narrationSaid: [String] = []// what the companion has already spoken (avoid repeats)
@@ -175,6 +179,7 @@ final class JarvisViewModel: ObservableObject {
         socket.onOpenURL = { [weak self] url in self?.previewRequest = url }
         socket.onContext = { [weak self] pct in self?.contextPct = pct }
         socket.onSay = { [weak self] text in self?.handleAgentSay(text) }
+        socket.onAsk = { [weak self] text in self?.handleAgentAsk(text) }
         socket.onStatus = { [weak self] label in
             guard let self else { return }
             // Live "what I'm doing" feed — only meaningful while thinking.
@@ -541,6 +546,21 @@ final class JarvisViewModel: ObservableObject {
     /// spoken "one moment" filler to cover the longer round-trip). With no Anthropic key the
     /// fast brain returns `.delegate`, so this collapses to the old "always ask the agent".
     private func route(_ text: String) {
+        // Jarvis just asked a question and is waiting: THIS is the answer. Feed it straight
+        // back into the same agent turn — no fast-brain routing, no new opener — so the whole
+        // thing plays as one conversation. The companion keeps narrating after the answer lands.
+        if awaitingAgentAnswer, agentBusy {
+            awaitingAgentAnswer = false
+            agentDirectedNarration = false          // let the auto-narrator resume between questions
+            speechGen &+= 1                          // supersede the question's speak task
+            appendMessage(.user, text)
+            log("↩︎ Answer → agent: \(text)")
+            state = .thinking; statusText = "Working…"; level = 0
+            lastNarration = Date()
+            socket.send(text: text)
+            return
+        }
+
         stopCompanion()             // a new utterance ends any prior agent-turn narration
         speechGen &+= 1              // this is now the live intent; supersede any stale speak
         state = .thinking
@@ -625,11 +645,13 @@ final class JarvisViewModel: ObservableObject {
     /// then a paced narration loop. Voice mode + fast brain only; otherwise the canned filler.
     private func beginAgentTurn(request: String) {
         statusText = "Working…"
+        agentBusy = true            // a turn is in flight — enables `ask`/`say` in every mode
+        awaitingAgentAnswer = false
+        companionRequest = request
         guard replyMode == .voice else { return }   // text mode (Phase A): silent thinking indicator
         guard fastBrain.isEnabled else { voice.playFiller(); return }
         agentTurnActive = true
         agentDirectedNarration = false
-        companionRequest = request
         statusBuffer.removeAll()
         narrationSaid.removeAll()
         lastNarration = Date()
@@ -702,6 +724,10 @@ final class JarvisViewModel: ObservableObject {
     /// End the companion overlay — cancels the narration loop and cuts any narration audio.
     /// Called when the agent's real reply arrives, or on interrupt/cancel/mode-switch/error.
     private func stopCompanion() {
+        // These bound the whole agent turn (every mode), so always clear them — even if the
+        // voice companion overlay was never running (text mode / fast brain off).
+        agentBusy = false
+        awaitingAgentAnswer = false
         guard agentTurnActive else { return }
         agentTurnActive = false
         agentDirectedNarration = false
@@ -716,11 +742,54 @@ final class JarvisViewModel: ObservableObject {
     /// agent's own words. Voice mode + an active agent turn only; ignored otherwise.
     private func handleAgentSay(_ text: String) {
         let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !line.isEmpty, replyMode == .voice, agentTurnActive else { return }
+        guard !line.isEmpty, replyMode == .voice, agentBusy else { return }
         agentDirectedNarration = true       // the agent is driving the narration now
         narrationSaid.append(line)
         log("🗣️ (agent) \(line)")
         Task { await speakCompanion(line) }
+    }
+
+    /// The agent hit a fork it won't assume its way past and asked a question ({"type":"ask"}).
+    /// Rather than a one-way update, this turns the turn into a conversation: speak the question,
+    /// open the mic, and the user's next utterance is routed straight back into the SAME turn
+    /// (see the answer-interception at the top of `route`). Works in every mode an agent turn can
+    /// run in; in text mode we just show it and wait for the composer.
+    private func handleAgentAsk(_ text: String) {
+        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, agentBusy else { return }
+        agentDirectedNarration = true       // the agent is driving now — auto-narrator yields
+        awaitingAgentAnswer = true          // the next thing the user says/types is the answer
+        narrationSaid.append(q)
+        log("❓ (agent asks) \(q)")
+        appendMessage(.jarvis, q)           // record the question in the transcript (both modes)
+
+        if replyMode == .text {
+            // Text mode: show it and wait — the composer's next send becomes the answer.
+            state = .thinking; statusText = "Waiting for your reply…"
+            return
+        }
+        Task { await speakAndListen(q) }    // voice mode: ask aloud, then open the mic
+    }
+
+    /// Speak a line (a question) and, unlike `speakCompanion`, drop into LISTENING afterwards so
+    /// the user can answer straight back — keeping the agent turn alive the whole time.
+    private func speakAndListen(_ line: String) async {
+        guard agentBusy else { return }
+        speechGen &+= 1
+        let gen = speechGen
+        voice.stop()
+        armed = false; heardSpeech = false; recorder.stop()
+        speakingText = line
+        state = .speaking
+        statusText = "Speaking…"
+        do { try await voice.speak(text: line) } catch { }
+        guard gen == speechGen, agentBusy, awaitingAgentAnswer else { return }  // superseded / answered
+        // Short beat so the tail of his own voice isn't caught as the answer, then open the mic.
+        level = 0; state = .idle
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        guard gen == speechGen, agentBusy, awaitingAgentAnswer, state == .idle else { return }
+        statusText = "Listening for your answer…"
+        armListening()
     }
 
     /// Speak a reply we already have in hand — from the agent (handleReply) or the fast

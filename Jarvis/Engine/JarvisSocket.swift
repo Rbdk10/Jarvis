@@ -12,7 +12,7 @@ struct JarvisArtifact: Identifiable, Equatable {
 
 /// WebSocket client to the Jarvis bridge. Text-only protocol:
 ///   send:    {"type":"message","text": "..."}
-///   receive: {"type":"reply","text": "..."} / "status" / "error" / "artifact"
+///   receive: {"type":"reply","text": "..."} / "say" / "ask" / "status" / "error" / "artifact"
 ///
 /// Reliability contract (why this class looks the way it does):
 ///  • `status` is HONEST — it flips to `.connected` only when the socket truly opens
@@ -43,6 +43,10 @@ final class JarvisSocket: NSObject, ObservableObject {
     /// progress line to speak *now* while it keeps working — {"type":"say","text":"…"}. Unlike
     /// `reply` (the final answer, which ends the turn), a `say` is an interim update.
     var onSay: ((String) -> Void)?
+    /// Mid-task QUESTION: the agent needs the user's input rather than assuming an answer —
+    /// {"type":"ask","text":"prod or staging?"}. The app speaks it, opens the mic, and routes
+    /// the spoken/typed reply straight back into the SAME turn (never a new-turn treatment).
+    var onAsk: ((String) -> Void)?
 
     private var session: URLSession!
     private var task: URLSessionWebSocketTask?
@@ -207,6 +211,8 @@ final class JarvisSocket: NSObject, ObservableObject {
         case "reply":  if let text = obj["text"] as? String { onReply?(text) }
         // Interim agent-directed narration (companion) — speak now, keep working.
         case "say":    if let text = obj["text"] as? String { onSay?(text) }
+        // Mid-task question — speak it, listen, feed the answer back into the same turn.
+        case "ask":    if let text = obj["text"] as? String { onAsk?(text) }
         // The bridge sends application-level {"type":"ping"} heartbeats every ~10s and
         // closes the socket ("no pong") if it doesn't get a {"type":"pong"} back within
         // ~30s. (These are JSON frames, distinct from the WS control-frame ping in

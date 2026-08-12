@@ -27,13 +27,22 @@ All frames are JSON over the existing WebSocket, same channel as `reply`/`status
   - `status` = a **technical** label (tool name, step). The app may narrate *from* it
     in Phase A, but `say` is preferred — it's already in the user's voice.
 
-### `ask` — mid-task question (planned, not yet wired app-side ⏳)
+### `ask` — mid-task question (implemented, app-side ✅)
 ```json
 {"type": "ask", "text": "There are two config files — the prod one, or staging?"}
 ```
-- Intended: speak the question, open the mic, and route the user's spoken answer
-  straight back to the **same** agent turn (no new-turn treatment).
-- Not implemented in the app yet — send `say` for now; `ask` lands next.
+- The app speaks the question, **opens the mic**, and routes the user's spoken (or,
+  in text mode, typed) answer **straight back into the same turn** as a normal
+  `{"type":"message"}` — no new-turn treatment, no opener, no fast-brain re-routing.
+  The companion resumes narrating after the answer lands.
+- The turn stays alive across the whole exchange: you may `ask` more than once, then
+  `say` progress, then finish with one `reply`. Only `reply` ends the turn.
+- This is what makes it a **conversation, not a monologue**. The rule for the agent:
+  **when you'd otherwise assume, `ask` instead.** Ambiguous target, missing detail,
+  a destructive/irreversible step, more than one reasonable interpretation → ask a
+  single, specific question and wait for the answer rather than guessing.
+- Keep questions **one at a time** (the app captures one spoken answer per `ask`) and
+  short. If you have several, ask the most decision-blocking one first.
 
 ## How the agent should narrate (guidance)
 
