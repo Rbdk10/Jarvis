@@ -44,6 +44,11 @@ platform :ios do
       build_number: (latest + 1).to_s
     )
 
+    # Keep the widget extension's build number in lockstep with the app (App Store Connect
+    # rejects an app/appex CFBundleVersion mismatch).
+    app_build = get_info_plist_value(path: "Jarvis/Resources/Info.plist", key: "CFBundleVersion")
+    set_info_plist_value(path: "JarvisWidgets/Info.plist", key: "CFBundleVersion", value: app_build)
+
     # Manual signing with the match profile (set AFTER xcodegen regenerated the project).
     # No -allowProvisioningUpdates → xcodebuild never creates a new certificate.
     profile_name = ENV["sigh_com.agrisol.Jarvis_appstore_profile-name"]
@@ -87,6 +92,12 @@ platform :ios do
 
     latest = latest_testflight_build_number(api_key: api_key, app_identifier: "com.agrisol.Jarvis")
     increment_build_number(xcodeproj: "Jarvis.xcodeproj", build_number: (latest + 1).to_s)
+
+    # Keep the widget extension's build number in lockstep with the app — App Store Connect
+    # rejects an app/appex CFBundleVersion mismatch. increment_build_number bumps the app's
+    # Info.plist; copy that exact value into the widget's (PlistBuddy, no agvtool needed).
+    app_build = get_info_plist_value(path: "Jarvis/Resources/Info.plist", key: "CFBundleVersion")
+    set_info_plist_value(path: "JarvisWidgets/Info.plist", key: "CFBundleVersion", value: app_build)
 
     # Automatic signing; the API key lets -allowProvisioningUpdates create/download the
     # cert + profile headlessly (how builds 1-13 shipped from the laptop). No match vault.
