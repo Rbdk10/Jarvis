@@ -127,6 +127,9 @@ final class JarvisViewModel: ObservableObject {
     private var lastUtterance = ""
     private var pendingRoute: (tier: String, model: String?, reason: String, escalated: Bool)?
 
+    /// Drives the Dynamic Island / Lock Screen Live Activity so Jarvis is present across apps.
+    private let live = LiveActivityController()
+
     // MARK: Voice-activity detection
     private var armed = false               // mic is open, waiting for / capturing speech
     private var heardSpeech = false         // speech has begun within this capture
@@ -205,6 +208,13 @@ final class JarvisViewModel: ObservableObject {
                 self.level = lvl
             }.store(in: &bag)
 
+        // Mirror Jarvis's state into the Dynamic Island / Lock Screen so he's present across
+        // apps. Throttled so rapid status churn doesn't spam ActivityKit updates.
+        Publishers.CombineLatest($state, $statusText)
+            .throttle(for: .milliseconds(250), scheduler: RunLoop.main, latest: true)
+            .sink { [weak self] _ in self?.syncLiveActivity() }
+            .store(in: &bag)
+
         socket.$status
             .sink { [weak self] st in
                 guard let self else { return }
@@ -235,6 +245,48 @@ final class JarvisViewModel: ObservableObject {
     /// proactively re-establish it — otherwise Jarvis looks connected but silently isn't.
     func appDidBecomeActive() {
         socket.foreground()
+        // Back in the app — resume normal idle listening if he was quietly waiting.
+        if state == .idle { beginIdleListening() }
+    }
+
+    /// App was swiped away. Keep playback + the socket alive (the `audio` background mode)
+    /// so a reply that's already coming still lands and speaks — that's the "hear him from
+    /// another app" case. Stop the mic/wake word though: iOS restricts background recording,
+    /// and v1 is about HEARING responses, not talking from the background.
+    func appDidEnterBackground() {
+        wake.stop()
+        if state == .listening, !agentBusy {
+            armed = false; heardSpeech = false; recorder.stop(); state = .idle
+        }
+        syncLiveActivity()   // make sure the island reflects his current state as you leave
+    }
+
+    // MARK: - Live Activity (Dynamic Island / Lock Screen)
+
+    /// Map the internal state machine to the shared `Phase` + a human line, and push it to the
+    /// island. Active (island shown) whenever Jarvis is doing anything; idle ends it after a linger.
+    private func syncLiveActivity() {
+        let phase: Phase
+        switch state {
+        case .idle:      phase = .idle
+        case .listening: phase = .listening
+        case .thinking:  phase = .thinking
+        case .speaking:  phase = .speaking
+        case .error:     phase = .error
+        }
+        let active = agentBusy || state != .idle
+        live.sync(phase: phase, line: islandLine(phase), active: active)
+    }
+
+    /// What to show on the island for a given phase.
+    private func islandLine(_ phase: Phase) -> String {
+        switch phase {
+        case .speaking:  return speakingText.isEmpty ? "Speaking…" : speakingText
+        case .listening: return "Listening…"
+        case .thinking:  return statusText
+        case .error:     return statusText
+        case .idle:      return speakingText.isEmpty ? "Ready" : speakingText   // last reply lingers
+        }
     }
 
     // MARK: Hands-free listening

@@ -16,6 +16,10 @@ targets:
     platform: iOS
     sources:
       - Jarvis
+      - Shared
+    dependencies:
+      - target: JarvisWidgets
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.agrisol.Jarvis
@@ -26,3 +30,20 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"
         DEVELOPMENT_TEAM: 6V4DVV45UP
+  # Widget extension — hosts the Jarvis Live Activity (Dynamic Island + Lock Screen).
+  JarvisWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - JarvisWidgets
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.agrisol.Jarvis.Widgets
+        INFOPLIST_FILE: JarvisWidgets/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: 6V4DVV45UP
+        SKIP_INSTALL: YES

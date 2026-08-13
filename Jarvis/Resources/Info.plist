@@ -15,11 +15,21 @@
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>56</string>
+    <string>57</string>
     <key>CFBundleDisplayName</key>
     <string>Jarvis</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
+    <!-- Jarvis lives in the Dynamic Island / Lock Screen via a Live Activity, and keeps
+         speaking after you swipe out via the audio background mode. -->
+    <key>NSSupportsLiveActivities</key>
+    <true/>
+    <key>NSSupportsLiveActivitiesFrequentUpdates</key>
+    <true/>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
     <key>NSMicrophoneUsageDescription</key>
     <string>Jarvis needs the microphone so you can talk to it.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
