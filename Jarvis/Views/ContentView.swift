@@ -137,7 +137,11 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.5))
                     .padding(.top, 6)
                 Group {
-                    if vm.state == .speaking {
+                    if vm.agentBusy {
+                        // He's working: tap Ask to open the mic for a question; while capturing
+                        // it, the same up-arrow sends it.
+                        if vm.state == .listening { submitButton } else { askButton }
+                    } else if vm.state == .speaking {
                         stopButton
                     } else if vm.state == .listening {
                         submitButton
@@ -546,6 +550,25 @@ struct ContentView: View {
                 .overlay(Circle().stroke((vm.handsFree ? Color(uiColor: blueWhite) : .white).opacity(0.3), lineWidth: 1))
         }
         .accessibilityLabel(vm.handsFree ? "Listening is on. Tap to stop listening." : "Listening is off. Tap to resume.")
+    }
+
+    /// Shown while the agent is working: tap to open the mic and ask a question mid-task.
+    /// (Narration is one-way; this is how you interject.)
+    private var askButton: some View {
+        Button { vm.askWhileWorking() } label: {
+            VStack(spacing: 8) {
+                Circle()
+                    .fill(Color(uiColor: blueWhite).opacity(0.16))
+                    .frame(width: 84, height: 84)
+                    .overlay(Image(systemName: "mic.fill").font(.system(size: 28)).foregroundStyle(.white))
+                    .overlay(Circle().stroke(Color(uiColor: blueWhite), lineWidth: 2))
+                Text("Ask a question")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.65))
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Ask Jarvis a question while he works")
     }
 
     /// Shown while listening (blue): tap to submit what you've said and send it.

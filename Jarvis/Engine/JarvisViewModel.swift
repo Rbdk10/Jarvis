@@ -510,11 +510,12 @@ final class JarvisViewModel: ObservableObject {
             } else {
                 noSpeechTicks += 1
                 if noSpeechTicks >= noSpeechTimeout {
+                    armed = false
+                    recorder.stop()
                     if agentBusy {
-                        noSpeechTicks = 0   // during a turn, stay open — you can talk anytime
+                        // Ask window elapsed with no question — back to quiet working.
+                        state = .thinking; statusText = "Working…"
                     } else {
-                        armed = false
-                        recorder.stop()
                         state = .idle
                         beginIdleListening()   // back to waiting for "Jarvis"
                     }
@@ -601,7 +602,7 @@ final class JarvisViewModel: ObservableObject {
     /// idle wake-word listen.
     private func resumeListeningAfterMiss() {
         if agentBusy {
-            enterTurnListening()
+            state = .thinking; statusText = "Working…"; level = 0   // back to quiet working
         } else {
             state = .idle; statusText = "Ready"; level = 0
             beginIdleListening()
@@ -745,17 +746,15 @@ final class JarvisViewModel: ObservableObject {
         statusBuffer.removeAll()
         narrationSaid.removeAll()
         lastNarration = Date()
-        // Instant acknowledgement, then open the mic so you can talk to the chatbot WHILE
-        // the agent works — the turn is a live conversation, not a one-way update.
+        // Instant acknowledgement, then the paced narration loop keeps you updated. The mic
+        // stays closed while he works — tap "Ask" to interject a question (see askWhileWorking).
         Task {
             let opener = await fastBrain.opener(request)
             guard agentBusy else { return }
             if let opener {
                 narrationSaid.append(opener)
                 log("🗣️ \(opener)")
-                await speakTurnLine(opener)   // speak, then drop into listening
-            } else {
-                enterTurnListening()
+                await speakTurnLine(opener)
             }
         }
         startNarrationLoop()
@@ -767,7 +766,7 @@ final class JarvisViewModel: ObservableObject {
         narrationTask?.cancel()
         narrationTask = Task { [weak self] in
             while true {
-                try? await Task.sleep(nanoseconds: 9_000_000_000)   // ~9s cadence (sparser: leaves room to talk)
+                try? await Task.sleep(nanoseconds: 6_500_000_000)   // ~6.5s cadence — keep me updated
                 guard let self, self.agentTurnActive else { return }
                 await self.narrateTick()
             }
@@ -782,13 +781,14 @@ final class JarvisViewModel: ObservableObject {
         guard agentBusy, agentTurnActive, fastBrain.isEnabled else { return }
         guard !agentDirectedNarration else { return }   // waiting on an answer — stay quiet
         guard !userMidUtterance else { return }          // you're talking — don't interrupt
-        // Only take the floor from listening/idle-thinking, never mid-speak.
-        guard state == .listening || state == .thinking else { return }
+        // Narrate only from the quiet "working" state — never over a spoken line, and never
+        // while the mic is open for one of your questions.
+        guard state == .thinking else { return }
         let line: String?
         if !statusBuffer.isEmpty {
             line = await fastBrain.narrate(request: companionRequest,
                                            status: statusBuffer, alreadySaid: narrationSaid)
-        } else if Date().timeIntervalSince(lastNarration) > 14 {
+        } else if Date().timeIntervalSince(lastNarration) > 12 {
             line = ["Still on it, sir.", "Working through it now.",
                     "Won't be a moment, sir."].randomElement()
         } else {
@@ -801,10 +801,20 @@ final class JarvisViewModel: ObservableObject {
         await speakTurnLine(line)
     }
 
-    /// Open the mic mid-turn so you can talk to the chatbot WHILE the agent works — the turn
-    /// stays alive; what you say is triaged in `handleMidWorkUtterance`. Voice + hands-free
-    /// only; otherwise we just sit in "working" (text mode / listening off).
-    private func enterTurnListening() {
+    /// The "Ask" button: interject a question while the agent works. Cuts any narration line
+    /// and opens the mic for ONE question (triaged in `handleMidWorkUtterance`). No-op unless a
+    /// turn is live and we're in voice mode.
+    func askWhileWorking() {
+        guard agentBusy, replyMode == .voice else { return }
+        speechGen &+= 1        // supersede any narration line playing right now
+        voice.stop()
+        beginAskListening()
+    }
+
+    /// Open the mic for ONE question while the agent works — from the Ask button, or right after
+    /// the agent asks its own question. Captured speech is triaged in `handleMidWorkUtterance`;
+    /// if nothing is said it times out back to quiet "working". Voice + hands-free only.
+    private func beginAskListening() {
         guard agentBusy else { return }
         guard replyMode == .voice, handsFree else {
             state = .thinking; statusText = "Working…"; level = 0; return
@@ -818,14 +828,14 @@ final class JarvisViewModel: ObservableObject {
                 armed = true; heardSpeech = false
                 voiceRunUp = 0; silenceTicks = 0; noSpeechTicks = 0; recentPeak = 0; level = 0
                 state = .listening
-                statusText = "Listening… (still working)"
+                statusText = "Ask away…"
             } catch { state = .thinking; statusText = "Working…" }
         }
     }
 
-    /// Speak ONE chatbot line during a live agent turn, then drop back into LISTENING so you
-    /// can talk. This is the loop that makes the turn a real conversation while the agent
-    /// grinds away. Superseded cleanly when the agent's real reply lands (see handleReply).
+    /// Speak ONE chatbot line during a live agent turn (opener / narration / a mid-work answer),
+    /// then drop back to quiet "working". The mic stays closed — narration is one-way; use the
+    /// Ask button to talk. Superseded cleanly when the agent's real reply lands (see handleReply).
     private func speakTurnLine(_ line: String) async {
         guard agentBusy else { return }
         speechGen &+= 1
@@ -839,9 +849,7 @@ final class JarvisViewModel: ObservableObject {
         lastNarration = Date()
         guard gen == speechGen, agentBusy else { return }     // reply landed / interrupted
         level = 0
-        try? await Task.sleep(nanoseconds: 250_000_000)       // let his voice tail off
-        guard gen == speechGen, agentBusy else { return }
-        enterTurnListening()
+        state = .thinking; statusText = "Working…"            // back to quiet working
     }
 
     /// You spoke (or typed) WHILE the agent is working. Keep the turn alive:
@@ -850,7 +858,7 @@ final class JarvisViewModel: ObservableObject {
     ///    new info / a course-correction. Then we go back to listening.
     private func handleMidWorkUtterance(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { enterTurnListening(); return }
+        guard !t.isEmpty else { state = .thinking; statusText = "Working…"; level = 0; return }
         appendMessage(.user, t)
 
         if awaitingAgentAnswer {
@@ -858,10 +866,9 @@ final class JarvisViewModel: ObservableObject {
             agentDirectedNarration = false
             speechGen &+= 1
             log("↩︎ Answer → agent: \(t)")
-            statusText = "Working…"; level = 0
+            state = .thinking; statusText = "Working…"; level = 0
             lastNarration = Date()
             socket.send(text: t)
-            enterTurnListening()
             return
         }
 
@@ -877,14 +884,13 @@ final class JarvisViewModel: ObservableObject {
                 // The chatbot answers you directly; the agent keeps working, untouched.
                 log("⚡ Chatbot (mid-work)")
                 narrationSaid.append(say)
-                if replyMode == .text { appendMessage(.jarvis, say); enterTurnListening() }
-                else { await speakTurnLine(say) }
+                if replyMode == .text { appendMessage(.jarvis, say); state = .thinking; statusText = "Working…" }
+                else { await speakTurnLine(say) }   // speak the answer, then back to quiet working
             case .delegate:
                 // New info / course-correction → hand it to the agent's same session.
                 log("→ Forwarded to agent (mid-work): \(t)")
                 socket.send(text: t)
-                statusText = "Working…"; lastNarration = Date()
-                enterTurnListening()
+                state = .thinking; statusText = "Working…"; lastNarration = Date()
             }
         }
     }
@@ -936,9 +942,13 @@ final class JarvisViewModel: ObservableObject {
             state = .thinking; statusText = "Waiting for your reply…"
             return
         }
-        // Voice: ask aloud, then drop into listening. `awaitingAgentAnswer` routes your reply
-        // straight back to the agent (see handleMidWorkUtterance).
-        Task { await speakTurnLine(q) }
+        // Voice: ask aloud, then open the mic for your answer. `awaitingAgentAnswer` routes
+        // your reply straight back to the agent (see handleMidWorkUtterance).
+        Task {
+            await speakTurnLine(q)
+            guard agentBusy, awaitingAgentAnswer else { return }
+            beginAskListening()
+        }
     }
 
     /// Speak a reply we already have in hand — from the agent (handleReply) or the fast
@@ -990,14 +1000,14 @@ final class JarvisViewModel: ObservableObject {
     /// Stop Jarvis mid-sentence and hand the floor straight back to you.
     func interrupt() {
         guard state == .speaking else { return }
-        // Barge-in during a live agent turn: cut the current line but KEEP the turn — just
-        // open the mic so you can talk over it. The agent carries on working.
+        // During a live agent turn: cut the current narration line but KEEP the turn — drop
+        // back to quiet working (use the Ask button to talk). The agent carries on.
         if agentBusy {
             speechGen &+= 1
             speakingText = ""
             voice.stop()
             level = 0
-            enterTurnListening()
+            state = .thinking; statusText = "Working…"
             return
         }
         speechGen &+= 1            // invalidate the in-flight speak task
