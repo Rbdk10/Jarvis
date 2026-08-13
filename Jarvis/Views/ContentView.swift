@@ -100,7 +100,7 @@ struct ContentView: View {
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 10) {
                             voiceTextIcons
-                            if vm.state == .thinking || vm.connecting { stopSignButton }
+                            if vm.state == .thinking || vm.connecting || vm.agentBusy { stopSignButton }
                         }
                         .padding(.leading, 16).padding(.top, 10)
                         Spacer()
