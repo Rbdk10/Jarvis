@@ -597,25 +597,13 @@ final class JarvisViewModel: ObservableObject {
             return
         }
 
-        // The chatbot is the VOICE; the agent is the silent BRAIN. The chatbot decides who
-        // handles this turn — so you never hear two of them reply to the same thing:
-        //   • conversation / anything it can answer itself → the chatbot answers, and the
-        //     agent is never even told. One voice, one reply.
-        //   • actual building / live data / anything it shouldn't guess → hand to the agent,
-        //     which works SILENTLY while the chatbot keeps you company and then delivers the
-        //     one result. The agent never speaks on its own.
-
-        // Tier 0 — obvious build/live-data requests skip the fast-brain round-trip and go
-        // straight to the agent (still silent; the chatbot narrates).
-        if Router.looksLikeAgentTask(text) {
-            activeHandler = .agent
-            pendingRoute = (tier: "agent", model: nil, reason: "heuristic: build/live-data", escalated: false)
-            log("🧭 → Building (agent, silent)")
-            statusText = "Working…"
-            beginAgentTurn(request: text)
-            socket.send(text: text)
-            return
-        }
+        // Everything goes through the chatbot. It is the single front door and decides who
+        // handles the turn — you never hear two of them reply to the same thing:
+        //   • anything it can answer itself → the chatbot answers, and the agent is never
+        //     even told. One voice, one reply.
+        //   • anything it can't do (building, live data, actions, or anything it shouldn't
+        //     guess) → it hands off to the agent, which works SILENTLY while the chatbot keeps
+        //     you company and then delivers the one result. The agent never speaks on its own.
 
         if fastBrain.isOverSpendCap, !capNoticeLogged {
             capNoticeLogged = true
