@@ -22,6 +22,11 @@ final class ElevenLabsService: NSObject, ObservableObject {
         }
     }
 
+    /// Single voice authority: there is exactly ONE audio player in the whole app. Every
+    /// spoken thing — the chatbot's opener, its narration, the agent's verbatim reply, and
+    /// the cached fillers — plays through this one player. With only one player object it is
+    /// physically impossible for two voices to sound at once (the "funny noises"). A new line
+    /// always supersedes the current one via `playToken`; nothing ever stacks.
     private var player: AVAudioPlayer?
     private var meterTimer: Timer?
     private var onFinish: (() -> Void)?
@@ -30,7 +35,6 @@ final class ElevenLabsService: NSObject, ObservableObject {
     private var playToken = 0
 
     // Instant acknowledgement — short clips cached on-device in the Jarvis voice.
-    private var fillerPlayer: AVAudioPlayer?
     private var fillerURLs: [URL] = []
     private let fillerPhrases = [
         "One moment.", "Let me check.", "On it.",
@@ -44,11 +48,9 @@ final class ElevenLabsService: NSObject, ObservableObject {
 
     // MARK: Stop
 
-    /// Stop everything (real reply + filler) and release a waiting `speak`. Used for
-    /// interrupt / barge-in.
+    /// Stop the one player and release a waiting `speak`. Used for interrupt / barge-in.
     func stop() {
         stopMain()
-        stopFiller()
     }
 
     private func stopMain() {
@@ -58,10 +60,6 @@ final class ElevenLabsService: NSObject, ObservableObject {
         playbackLevel = 0
         let finish = onFinish; onFinish = nil
         finish?()
-    }
-
-    private func stopFiller() {
-        fillerPlayer?.stop(); fillerPlayer = nil
     }
 
     // MARK: Instant acknowledgement ("filler")
@@ -88,19 +86,20 @@ final class ElevenLabsService: NSObject, ObservableObject {
 
     /// Speak a short acknowledgement instantly from cache (no network). Best-effort:
     /// a no-op if the fillers aren't cached yet. The real reply takes over when ready.
+    /// Plays through the ONE shared player (via `stopMain`'s supersede), so a filler can
+    /// never sound on top of a reply or another filler.
     func playFiller() {
         guard let url = fillerURLs.randomElement() else { return }
-        // Never stack voices. A filler marks a NEW intent, so it supersedes whatever is
-        // still playing — an earlier filler (two "one moment"s on top of each other) and
-        // any reply still being spoken from the previous turn. Without this you get two
-        // or three Jarvis voices talking at once.
-        stopMain()
-        stopFiller()
+        stopMain()                       // supersede whatever's on the single player
+        let token = playToken
         do {
             try activatePlayback()
             let p = try AVAudioPlayer(contentsOf: url)
+            p.delegate = self
+            guard token == playToken else { return }
+            onFinish = nil               // a filler has no completion handshake
+            player = p
             p.play()
-            fillerPlayer = p
         } catch { /* best-effort; never block the real flow on a filler */ }
     }
 
@@ -165,7 +164,9 @@ final class ElevenLabsService: NSObject, ObservableObject {
     }
 
     func speak(text: String) async throws {
-        // Supersede a previous reply, but leave any filler playing to cover the fetch.
+        // Supersede whatever's on the single player (a prior reply or a filler) before we
+        // start — one voice at a time, always. Brief silence while the first chunk renders
+        // is fine; the chatbot's spoken opener already covered the acknowledgement.
         stopMain()
         let token = playToken
 
@@ -218,7 +219,6 @@ final class ElevenLabsService: NSObject, ObservableObject {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             guard token == playToken else { cont.resume(); return }
             self.onFinish = { cont.resume() }
-            self.stopFiller()          // seamless hand-off: filler out, real reply in
             p.play()
             self.meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 guard let self, self.playToken == token, let pl = self.player else { return }
