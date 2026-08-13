@@ -563,6 +563,7 @@ final class JarvisViewModel: ObservableObject {
 
         stopCompanion()             // a new utterance ends any prior agent-turn narration
         speechGen &+= 1              // this is now the live intent; supersede any stale speak
+        let gen = speechGen
         state = .thinking
         statusText = "Thinking…"
         level = 0
@@ -596,16 +597,55 @@ final class JarvisViewModel: ObservableObject {
             return
         }
 
-        // Single agent: every real utterance goes to the agent, and the fast brain rides along
-        // as the companion — an instant tailored opener, then paced narration grounded in the
-        // agent's live status — so it talks to you while the agent does the actual work, and
-        // the agent's final answer still lands as the real reply (see beginAgentTurn).
-        activeHandler = .agent
-        pendingRoute = (tier: "agent", model: nil, reason: "single agent", escalated: false)
-        log("🟠 → Agent")
-        statusText = "Working…"
-        beginAgentTurn(request: text)   // instant acknowledgement + companion narration
-        socket.send(text: text)
+        // The chatbot is the VOICE; the agent is the silent BRAIN. The chatbot decides who
+        // handles this turn — so you never hear two of them reply to the same thing:
+        //   • conversation / anything it can answer itself → the chatbot answers, and the
+        //     agent is never even told. One voice, one reply.
+        //   • actual building / live data / anything it shouldn't guess → hand to the agent,
+        //     which works SILENTLY while the chatbot keeps you company and then delivers the
+        //     one result. The agent never speaks on its own.
+
+        // Tier 0 — obvious build/live-data requests skip the fast-brain round-trip and go
+        // straight to the agent (still silent; the chatbot narrates).
+        if Router.looksLikeAgentTask(text) {
+            activeHandler = .agent
+            pendingRoute = (tier: "agent", model: nil, reason: "heuristic: build/live-data", escalated: false)
+            log("🧭 → Building (agent, silent)")
+            statusText = "Working…"
+            beginAgentTurn(request: text)
+            socket.send(text: text)
+            return
+        }
+
+        if fastBrain.isOverSpendCap, !capNoticeLogged {
+            capNoticeLogged = true
+            log("⚠️ Fast-brain spend cap (\(CostMeter.money(AppConfig.fastBrainSpendCapUSD))) reached — everything now routes to the agent until you reset the meter.")
+        }
+
+        Task {
+            let decision = await fastBrain.decide(text)
+            if fastBrain.isEnabled {
+                log("💰 \(costMeter.lastCallText) this turn · \(costMeter.totalText) total")
+            }
+            guard gen == speechGen else { return }   // superseded while deciding
+            switch decision {
+            case .reply(let say):
+                // The chatbot handled it itself — the agent is untouched. Single voice.
+                activeHandler = .chatbot
+                pendingRoute = (tier: "fast", model: AppConfig.fastBrainModel, reason: "chatbot answered", escalated: false)
+                log("⚡ Chatbot reply")
+                deliver(say)
+            case .delegate:
+                // Real work → the silent agent builds; the chatbot keeps you company and
+                // relays the single result when it lands (see beginAgentTurn / handleReply).
+                activeHandler = .agent
+                pendingRoute = (tier: "agent", model: nil, reason: "chatbot handed to agent", escalated: true)
+                log("→ Building (agent, silent)")
+                statusText = "Working…"
+                beginAgentTurn(request: text)
+                socket.send(text: text)
+            }
+        }
     }
 
     private func handleReply(_ text: String) {
