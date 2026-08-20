@@ -42,8 +42,17 @@ final class ElevenLabsService: NSObject, ObservableObject {
     ]
 
     private func activatePlayback() throws {
-        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try AVAudioSession.sharedInstance().setActive(true)
+        // Speak over .playAndRecord (NOT .playback) so playback shares the SAME session
+        // category the background wake-word listener already holds. Switching category to
+        // .playback mid-turn while backgrounded is what left Jarvis mute out of the app —
+        // the switch gets refused, or the listener's .measurement-mode earpiece routing
+        // sticks and the audio plays where you can't hear it. Staying in .playAndRecord with
+        // mode .default + .defaultToSpeaker means there's no category switch to fail, and the
+        // route resets to the speaker (still honouring AirPods/Bluetooth via .allowBluetooth).
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default,
+                                options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setActive(true)
     }
 
     // MARK: Stop

@@ -404,7 +404,7 @@ final class JarvisViewModel: ObservableObject {
         state = .speaking
         statusText = "…"
         Task {
-            do { try await voice.speak(text: greeting()) } catch { }
+            do { try await voice.speak(text: greeting()) } catch { log("🔇 greet failed: \(error.localizedDescription)") }
             guard gen == speechGen else { return }   // superseded (e.g. a tap/interrupt)
             state = .idle; level = 0
             armListening()
@@ -931,7 +931,7 @@ final class JarvisViewModel: ObservableObject {
         speakingText = line
         state = .speaking
         statusText = "Speaking…"
-        do { try await voice.speak(text: line) } catch { }
+        do { try await voice.speak(text: line) } catch { log("🔇 speak failed: \(error.localizedDescription)") }
         lastNarration = Date()
         guard gen == speechGen, agentBusy else { return }     // reply landed / interrupted
         level = 0
