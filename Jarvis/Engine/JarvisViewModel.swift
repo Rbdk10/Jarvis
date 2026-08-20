@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AVFoundation
 
 /// One step in the activity trace (swipe-right log).
 struct ActivityEntry: Identifiable {
@@ -37,6 +38,33 @@ final class JarvisViewModel: ObservableObject {
     @Published var connecting: Bool = true
     /// When true (default), Jarvis listens automatically. The button toggles this.
     @Published var handsFree: Bool = true
+
+    /// When true, Jarvis works SILENTLY and speaks only the final result — no running
+    /// narration while he's on a task. Sticky: persists across tasks and app launches.
+    /// Default false, so out of the box he keeps you posted. Distinct from `handsFree`
+    /// (which is about whether he *listens*); this is about whether he *talks while working*.
+    /// A genuine `ask` (a question that blocks the task) still comes through even when muted.
+    @Published var updatesMuted: Bool = UserDefaults.standard.bool(forKey: "jarvisUpdatesMuted") {
+        didSet { UserDefaults.standard.set(updatesMuted, forKey: "jarvisUpdatesMuted") }
+    }
+
+    /// Keep listening once the app is backgrounded — so you can call "Jarvis" from any app.
+    /// SEPARATE from `handsFree`: the ear button governs whether he listens at all (foreground
+    /// included); this governs only whether that listening survives leaving the app. Both must
+    /// be on to hear you across apps. Sticky; defaults ON (you asked for always-on). Costs: the
+    /// orange mic dot stays lit in the background, and battery. Turn OFF for foreground-only.
+    @Published var backgroundListening: Bool =
+        (UserDefaults.standard.object(forKey: "jarvisBackgroundListening") as? Bool) ?? true {
+        didSet { UserDefaults.standard.set(backgroundListening, forKey: "jarvisBackgroundListening") }
+    }
+
+    /// True while the app is backgrounded (maintained by the scene-phase hooks). Gates the
+    /// background-listening decision so we don't open the mic off-screen unless allowed.
+    private var inBackground = false
+
+    /// May he have the mic open right now? Foreground: always (subject to `handsFree`, checked
+    /// at each call site). Backgrounded: only if `backgroundListening` is on.
+    private var mayListenNow: Bool { !inBackground || backgroundListening }
 
     /// There's now a single agent. Every real utterance goes to it, with the fast brain riding
     /// along as the live companion narrator — so the agent does the work while the chatbot
@@ -196,6 +224,24 @@ final class JarvisViewModel: ObservableObject {
             }
         }
 
+        // Audio-session interruptions (a phone call, a video, another app recording) tear down
+        // our mic engine. Recover from them so background listening survives — without this,
+        // "always listening" dies the first time anything else uses audio and never comes back.
+        // Parse the primitive keys on the main queue, then hop onto the actor to act.
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let info = note.userInfo
+            let typeRaw = (info?[AVAudioSessionInterruptionTypeKey] as? UInt) ?? 0
+            let optsRaw = (info?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
+            Task { @MainActor in self?.onAudioInterruption(typeRaw: typeRaw, optionsRaw: optsRaw) }
+        }
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.onMediaServicesReset() }
+        }
+
         // Mic meter drives voice-activity detection. It never drives the orb — the
         // orb only moves to Jarvis's voice (see the playbackLevel sink below).
         recorder.$level
@@ -244,21 +290,60 @@ final class JarvisViewModel: ObservableObject {
     /// App returned to the foreground. iOS suspends the WebSocket while backgrounded, so
     /// proactively re-establish it — otherwise Jarvis looks connected but silently isn't.
     func appDidBecomeActive() {
+        inBackground = false
         socket.foreground()
         // Back in the app — resume normal idle listening if he was quietly waiting.
         if state == .idle { beginIdleListening() }
     }
 
-    /// App was swiped away. Keep playback + the socket alive (the `audio` background mode)
-    /// so a reply that's already coming still lands and speaks — that's the "hear him from
-    /// another app" case. Stop the mic/wake word though: iOS restricts background recording,
-    /// and v1 is about HEARING responses, not talking from the background.
+    /// App was swiped away. With the `audio` background mode + an active mic session, he keeps
+    /// hearing the wake word across other apps — so you can call him from anywhere, and he can
+    /// reply from the background too. We keep the wake listener alive as we leave (and let any
+    /// in-flight capture keep going); we only go deaf when hands-free is off or we're in text
+    /// mode. Costs of always-listening: the orange mic dot stays lit, and battery.
     func appDidEnterBackground() {
-        wake.stop()
-        if state == .listening, !agentBusy {
-            armed = false; heardSpeech = false; recorder.stop(); state = .idle
+        inBackground = true
+        if handsFree, replyMode == .voice, backgroundListening {
+            if state == .idle { beginIdleListening() }   // ensure the wake listener is live as we leave
+        } else {
+            // Background listening off (or hands-free/text) → go quiet off-screen, as before.
+            wake.stop()
+            if state == .listening, !agentBusy {
+                armed = false; heardSpeech = false; recorder.stop(); state = .idle
+            }
         }
         syncLiveActivity()   // make sure the island reflects his current state as you leave
+    }
+
+    /// Another app grabbed the audio hardware (a call, a video, another recorder) or handed it
+    /// back. On `.began` we stand down cleanly; on `.ended` we reactivate the session and re-arm
+    /// the wake listener. This is what lets background listening survive a phone call instead of
+    /// dying silently the first time something else uses audio.
+    private func onAudioInterruption(typeRaw: UInt, optionsRaw: UInt) {
+        guard let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+        switch type {
+        case .began:
+            wake.stop(); recorder.stop()
+            if state == .listening, !agentBusy { armed = false; heardSpeech = false; level = 0; state = .idle }
+            log("🎙️ Audio interrupted — standing by")
+        case .ended:
+            guard AVAudioSession.InterruptionOptions(rawValue: optionsRaw).contains(.shouldResume) else {
+                log("🎙️ Interruption ended (system says don't resume)"); return
+            }
+            try? AVAudioSession.sharedInstance().setActive(true)
+            if state == .idle { beginIdleListening() }   // wake listener comes back if hands-free + voice
+            log("🎙️ Audio resumed — listening again")
+        @unknown default:
+            break
+        }
+    }
+
+    /// The audio server crashed and reset (rare). Every audio object is now invalid, so tear
+    /// down and rebuild the listening path from scratch.
+    private func onMediaServicesReset() {
+        wake.stop(); recorder.stop(); voice.stop()
+        if state == .idle { beginIdleListening() }
+        log("🎙️ Media services reset — rebuilt audio")
     }
 
     // MARK: - Live Activity (Dynamic Island / Lock Screen)
@@ -295,7 +380,7 @@ final class JarvisViewModel: ObservableObject {
     /// heard do we open the mic to capture a command (see `onWake`). This is why
     /// background chatter no longer triggers Jarvis.
     func beginIdleListening() {
-        guard replyMode == .voice, handsFree, state == .idle else { return }
+        guard replyMode == .voice, handsFree, mayListenNow, state == .idle else { return }
         recorder.stop()           // ensure the command recorder isn't holding the mic
         armed = false
         Task {
@@ -474,7 +559,7 @@ final class JarvisViewModel: ObservableObject {
     /// Open the mic and wait for speech. Capture begins automatically when you start
     /// talking and ends after a short trailing silence.
     func armListening() {
-        guard replyMode == .voice, handsFree, state == .idle, !armed else { return }
+        guard replyMode == .voice, handsFree, mayListenNow, state == .idle, !armed else { return }
         Task {
             guard await recorder.requestPermission() else { setError("Microphone denied"); return }
             do {
@@ -740,6 +825,7 @@ final class JarvisViewModel: ObservableObject {
         awaitingAgentAnswer = false
         companionRequest = request
         guard replyMode == .voice else { return }   // text mode (Phase A): silent thinking indicator
+        guard !updatesMuted else { return }         // muted → he works silently; only the reply speaks
         guard fastBrain.isEnabled else { voice.playFiller(); return }
         agentTurnActive = true
         agentDirectedNarration = false
@@ -911,16 +997,53 @@ final class JarvisViewModel: ObservableObject {
         statusBuffer.removeAll(); narrationSaid.removeAll()
     }
 
-    /// Interim agent narration ({"type":"say"}) is now IGNORED. Keeping the user updated is the
-    /// chatbot companion's job alone — when the agent also narrated (old Phase B), the app's
-    /// narrator yielded to it, which (a) made the chatbot go quiet and (b) doubled up, so Jarvis
-    /// said more or less the same thing twice. The agent should only ever emit a final
-    /// `jarvis_reply` (+ `jarvis_ask` for questions); any stray `say` is dropped here so it can
-    /// never talk over or duplicate the companion.
+    /// The updates-mute button: silence (or bring back) his running narration while he works.
+    /// The new value is sticky. Muting mid-task hushes any update playing right now but keeps the
+    /// turn alive — he still speaks the final result; unmuting mid-task brings the live updates
+    /// back. Does NOT touch listening (that's `handsFree`) or end the turn (that's `cancel`).
+    func toggleUpdatesMuted() {
+        updatesMuted.toggle()
+        if updatesMuted {
+            narrationTask?.cancel(); narrationTask = nil
+            agentTurnActive = false
+            speechGen &+= 1                       // cut any narration line playing right now
+            if state == .speaking { voice.stop(); level = 0 }
+            if agentBusy { state = .thinking; statusText = "Working…" }
+            log("🔇 Updates muted — I'll speak when it's done")
+        } else {
+            log("🔊 Updates on — I'll keep you posted")
+            // Bring the live companion back if a turn is running and he isn't already narrating.
+            if agentBusy, replyMode == .voice, fastBrain.isEnabled, !agentDirectedNarration {
+                agentTurnActive = true
+                lastNarration = Date()
+                startNarrationLoop()
+            }
+        }
+    }
+
+    /// Interim agent narration ({"type":"say"}) — his real, first-person progress line. This IS
+    /// "keep me updated": we speak it immediately without ending the turn, so you hear what he's
+    /// actually doing rather than the app's guess. The FIRST `say` of a turn makes the app's
+    /// auto-narrator yield (`agentDirectedNarration`) so the chatbot and the agent never both
+    /// narrate — that doubling ("said the same thing twice") is why this was briefly disabled;
+    /// the yield is what prevents it. Suppressed entirely while `updatesMuted` (he works silently
+    /// and only the final `reply` speaks). A real question comes in via `ask`, not here.
     private func handleAgentSay(_ text: String) {
         let line = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !line.isEmpty else { return }
-        log("🔇 Ignored agent say (companion narrates): \(line)")
+        guard !line.isEmpty, agentBusy else { return }
+        guard !updatesMuted else { log("🔇 Muted — held an update"); return }
+        guard !awaitingAgentAnswer else { return }   // he asked something; don't talk over the wait
+        agentDirectedNarration = true                // his words drive narration now — auto-narrator yields
+        narrationSaid.append(line)
+
+        // Text mode: surface the update in the transcript instead of speaking it.
+        if replyMode == .text {
+            appendMessage(.jarvis, line)
+            log("📝 (agent update) \(line)")
+            return
+        }
+        log("🗣️ (agent) \(line)")
+        Task { await speakTurnLine(line) }
     }
 
     /// The agent hit a fork it won't assume its way past and asked a question ({"type":"ask"}).

@@ -15,13 +15,15 @@
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>58</string>
+    <string>59</string>
     <key>CFBundleDisplayName</key>
     <string>Jarvis</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
-    <!-- Jarvis lives in the Dynamic Island / Lock Screen via a Live Activity, and keeps
-         speaking after you swipe out via the audio background mode. -->
+    <!-- Jarvis lives in the Dynamic Island / Lock Screen via a Live Activity, and the audio
+         background mode keeps him both SPEAKING and LISTENING after you swipe out — so you can
+         call "Jarvis" from any app and hear his reply. (The orange mic dot stays lit while he
+         listens; that's the OS privacy indicator, unavoidable for background capture.) -->
     <key>NSSupportsLiveActivities</key>
     <true/>
     <key>NSSupportsLiveActivitiesFrequentUpdates</key>

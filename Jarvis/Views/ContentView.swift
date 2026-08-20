@@ -105,7 +105,9 @@ struct ContentView: View {
                         .padding(.leading, 16).padding(.top, 10)
                         Spacer()
                         VStack(spacing: 10) {
+                            updatesMuteButton
                             muteButton
+                            backgroundListenButton
                             if let pct = vm.contextPct { contextGauge(pct) }
                         }
                         .padding(.trailing, 16).padding(.top, 10)
@@ -538,6 +540,43 @@ struct ContentView: View {
                 .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
         }
         .accessibilityLabel("Stop what Jarvis is doing")
+    }
+
+    /// Updates-mute: silence Jarvis's running narration while he works (he'll still speak the
+    /// final result), or turn the live updates back on. Sticky. Distinct from `muteButton`,
+    /// which is about whether he *listens*.
+    private var updatesMuteButton: some View {
+        Button { vm.toggleUpdatesMuted() } label: {
+            Image(systemName: vm.updatesMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(vm.updatesMuted ? .white.opacity(0.45) : Color(uiColor: blueWhite))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.white.opacity(0.08)))
+                .overlay(Circle().stroke((vm.updatesMuted ? .white : Color(uiColor: blueWhite)).opacity(0.3), lineWidth: 1))
+        }
+        .accessibilityLabel(vm.updatesMuted
+            ? "Updates muted. Tap so Jarvis narrates his progress."
+            : "Updates on. Tap to mute — Jarvis will only speak when he's done.")
+    }
+
+    /// Background-listening toggle: keep hearing "Jarvis" after the app is backgrounded, so you
+    /// can call him from any app. Separate from the ear button (which governs listening at all)
+    /// because it carries the always-on-mic costs — the orange dot and battery. Only takes
+    /// effect while the ear button is on. Sticky.
+    private var backgroundListenButton: some View {
+        Button { vm.backgroundListening.toggle() } label: {
+            Image(systemName: vm.backgroundListening
+                  ? "antenna.radiowaves.left.and.right"
+                  : "antenna.radiowaves.left.and.right.slash")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(vm.backgroundListening ? Color(uiColor: blueWhite) : .white.opacity(0.45))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.white.opacity(0.08)))
+                .overlay(Circle().stroke((vm.backgroundListening ? Color(uiColor: blueWhite) : .white).opacity(0.3), lineWidth: 1))
+        }
+        .accessibilityLabel(vm.backgroundListening
+            ? "Background listening on. Jarvis hears you from other apps. Tap for foreground-only."
+            : "Background listening off. Jarvis only listens with the app open. Tap to listen everywhere.")
     }
 
     private var muteButton: some View {

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- viewport-fit=cover so the dark bg bleeds under the notch/home indicator -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Billy Base</title>
+<style>
+  /* ---- Design tokens: dark-native, matches the Jarvis app accent ---- */
+  :root{
+    --bg-0:#080b16; --bg-1:#0f1424; --bg-2:#161d34;
+    --ink:#f4f6fb; --muted:rgba(244,246,251,.60); --faint:rgba(244,246,251,.38);
+    --accent:#7cc4ff;            /* app blue-white */
+    --accent-2:#a78bfa;          /* violet, for gradients/glows */
+    --good:#5ee6a8; --warn:#ffcc66; --bad:#ff7a8a;
+    --glass:rgba(255,255,255,.055);
+    --hair:rgba(255,255,255,.10);
+    --r:20px; --r-sm:13px;
+    --shadow:0 18px 50px -20px rgba(0,0,0,.75);
+    --ease:cubic-bezier(.22,1,.36,1);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; padding:0; width:100%; overflow-x:hidden}
+  body{
+    /* The app's WebView is TRANSPARENT — we own the background. */
+    background:
+      radial-gradient(120% 80% at 15% -10%, rgba(124,196,255,.16), transparent 55%),
+      radial-gradient(120% 90% at 100% 0%, rgba(167,139,250,.14), transparent 50%),
+      linear-gradient(180deg, var(--bg-1), var(--bg-0));
+    background-attachment:fixed;
+    color:var(--ink);
+    font:400 16px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+    letter-spacing:-.01em;
+    min-height:100vh;
+    padding:
+      max(20px, env(safe-area-inset-top)) 18px
+      max(28px, env(safe-area-inset-bottom)) 18px;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---- Entrance: staggered rise. Children get .rise + --i for stagger ---- */
+  .rise{opacity:0; transform:translateY(14px); animation:rise .7s var(--ease) forwards; animation-delay:calc(var(--i,0)*80ms)}
+  @keyframes rise{to{opacity:1; transform:none}}
+
+  /* ---- Header ---- */
+  .eyebrow{font:600 12px/1 -apple-system,sans-serif; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); opacity:.85}
+  h1{margin:.5rem 0 0; font:700 30px/1.08 -apple-system,sans-serif; letter-spacing:-.03em;
+     background:linear-gradient(120deg,#fff 20%, var(--accent) 70%, var(--accent-2));
+     -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent}
+  .sub{margin:.55rem 0 0; color:var(--muted); font-size:15px; max-width:40ch}
+
+  /* ---- Glass card ---- */
+  .card{
+    background:var(--glass); border:1px solid var(--hair); border-radius:var(--r);
+    backdrop-filter:blur(14px) saturate(1.3); -webkit-backdrop-filter:blur(14px) saturate(1.3);
+    box-shadow:var(--shadow); padding:18px;
+  }
+  .grid{display:grid; gap:12px; margin-top:20px}
+  .grid.two{grid-template-columns:1fr 1fr}
+
+  /* ---- Stat ---- */
+  .stat .n{font:700 34px/1 -apple-system,sans-serif; letter-spacing:-.03em}
+  .stat .l{margin-top:6px; color:var(--muted); font-size:13px}
+  .stat .n .unit{font-size:16px; color:var(--faint); font-weight:600; margin-left:2px}
+
+  /* ---- Segmented control (interactive, touch) ---- */
+  .seg{display:flex; gap:4px; padding:4px; margin-top:20px;
+       background:rgba(0,0,0,.28); border:1px solid var(--hair); border-radius:var(--r-sm)}
+  .seg button{flex:1; appearance:none; border:0; background:transparent; color:var(--muted);
+    font:600 14px -apple-system,sans-serif; padding:10px 8px; border-radius:9px;
+    transition:color .25s, background .25s; cursor:pointer; min-height:40px}
+  .seg button[aria-selected="true"]{background:var(--accent); color:#04101f; box-shadow:0 6px 18px -8px var(--accent)}
+  .seg button:active{transform:scale(.97)}
+
+  .panel{margin-top:14px}
+  .panel[hidden]{display:none}
+
+  /* ---- Progress ring ---- */
+  .ring{--p:0; width:118px; height:118px; margin:2px auto; display:grid; place-items:center; position:relative}
+  .ring svg{transform:rotate(-90deg); width:100%; height:100%}
+  .ring .track{stroke:rgba(255,255,255,.09)}
+  .ring .fill{stroke:url(#g); stroke-linecap:round; transition:stroke-dashoffset 1.1s var(--ease)}
+  .ring .val{position:absolute; font:700 26px -apple-system,sans-serif}
+
+  .foot{margin-top:22px; text-align:center; color:var(--faint); font-size:12px; letter-spacing:.02em}
+
+  @media (prefers-reduced-motion:reduce){
+    .rise{animation:none; opacity:1; transform:none}
+    .ring .fill{transition:none}
+    *{scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+
+  <header class="rise" style="--i:0">
+    <div class="eyebrow">Overview</div>
+    <h1>Give me a real title</h1>
+    <p class="sub">One clear line of context. Replace all of this — the scaffold is only the skeleton and the moves.</p>
+  </header>
+
+  <!-- Interactive segmented control -->
+  <div class="seg rise" style="--i:1" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="a">Today</button>
+    <button role="tab" aria-selected="false" data-tab="b">Week</button>
+  </div>
+
+  <section class="panel" data-panel="a">
+    <div class="grid two">
+      <div class="card stat rise" style="--i:2"><div class="n" data-count="128" data-unit="ms">0</div><div class="l">Latency p50</div></div>
+      <div class="card stat rise" style="--i:3"><div class="n" data-count="99.9" data-unit="%">0</div><div class="l">Uptime</div></div>
+    </div>
+    <div class="card rise" style="--i:4; margin-top:12px; text-align:center">
+      <div class="ring" data-ring="74">
+        <svg viewBox="0 0 120 120">
+          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#7cc4ff"/><stop offset="1" stop-color="#a78bfa"/>
+          </linearGradient></defs>
+          <circle class="track" cx="60" cy="60" r="52" fill="none" stroke-width="12"/>
+          <circle class="fill"  cx="60" cy="60" r="52" fill="none" stroke-width="12"
+                  stroke-dasharray="326.7" stroke-dashoffset="326.7"/>
+        </svg>
+        <div class="val">0%</div>
+      </div>
+      <div class="l" style="color:var(--muted); font-size:13px; margin-top:4px">Goal progress</div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="b" hidden>
+    <div class="card rise"><p style="margin:0; color:var(--muted)">Second tab content. Swap panels with the control above — this is the interaction pattern to reuse.</p></div>
+  </section>
+
+  <div class="foot rise" style="--i:5">Built by Billy · tap around, it's alive</div>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion:reduce)').matches;
+
+  /* Count-up numbers (respects decimals + unit) */
+  document.querySelectorAll('[data-count]').forEach(el => {
+    const target = parseFloat(el.dataset.count), unit = el.dataset.unit || '';
+    const dp = (el.dataset.count.split('.')[1] || '').length;
+    const wrap = v => v.toFixed(dp) + (unit ? `<span class="unit">${unit}</span>` : '');
+    if (reduce){ el.innerHTML = wrap(target); return; }
+    const t0 = performance.now(), dur = 1100;
+    const tick = t => {
+      const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      el.innerHTML = wrap(target * e);
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  /* Progress ring */
+  document.querySelectorAll('[data-ring]').forEach(r => {
+    const pct = +r.dataset.ring, C = 326.7, fill = r.querySelector('.fill'), val = r.querySelector('.val');
+    requestAnimationFrame(() => fill.style.strokeDashoffset = C * (1 - pct/100));
+    if (reduce){ val.textContent = pct + '%'; return; }
+    const t0 = performance.now();
+    const tick = t => { const k = Math.min(1,(t-t0)/1100); val.textContent = Math.round(pct*k)+'%'; if(k<1) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+
+  /* Segmented tabs */
+  const tabs = [...document.querySelectorAll('.seg button')];
+  tabs.forEach(b => b.addEventListener('click', () => {
+    tabs.forEach(x => x.setAttribute('aria-selected', x === b));
+    document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
+  }));
+})();
+</script>
+</body>
+</html>
