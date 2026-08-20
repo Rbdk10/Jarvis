@@ -22,16 +22,18 @@ platform :ios do
     # reaching TestFlight — applies whether the laptop OR the agent runs `fastlane beta`.
     sh("cd .. && bash tools/smoke_test.sh")
 
-    # Fetch (or, on the very first run, create) ONE reusable signing identity from the
-    # encrypted match vault — instead of minting a brand-new certificate every build.
-    # THIS is what stops the "maximum number of certificates" wall: the cert is created
-    # once, stored in the private vault repo, and reused by every build thereafter.
+    # Fetch (or create if missing) ONE reusable signing identity + an App Store profile for
+    # EACH bundle id — the app AND the widget extension. match reuses the single distribution
+    # cert and only ever mints a *profile* per id (never a new cert), so this does NOT
+    # re-trigger the "maximum number of certificates" wall. readonly:false so the first run can
+    # create the widget profile the vault predates (the widget was added after match was seeded);
+    # safe to tighten back to true once com.agrisol.Jarvis.Widgets is in the vault.
     match(
       type: "appstore",
-      app_identifier: "com.agrisol.Jarvis",
+      app_identifier: ["com.agrisol.Jarvis", "com.agrisol.Jarvis.Widgets"],
       api_key: api_key,
       git_url: "https://github.com/AnthonieDeKlerk78/jarvis-match.git",
-      readonly: true    # vault already seeded — fetch + install the stored identity, never create
+      readonly: false
     )
 
     # Next build number = one above the latest already on TestFlight.
@@ -44,16 +46,28 @@ platform :ios do
       build_number: (latest + 1).to_s   # bumps BOTH app + widget Info.plists (agvtool -all)
     )
 
-    # Manual signing with the match profile (set AFTER xcodegen regenerated the project).
-    # No -allowProvisioningUpdates → xcodebuild never creates a new certificate.
-    profile_name = ENV["sigh_com.agrisol.Jarvis_appstore_profile-name"]
+    # Manual signing PER TARGET with each target's own profile (set AFTER xcodegen regenerated
+    # the project). No -allowProvisioningUpdates → xcodebuild never creates a new certificate.
+    # CRITICAL: do NOT pass `bundle_identifier:` here — that param OVERWRITES
+    # PRODUCT_BUNDLE_IDENTIFIER on every target, which silently renamed the widget to the app's
+    # id and caused a TestFlight bundle-id collision (90685). Scope with `targets:` instead.
+    app_profile    = ENV["sigh_com.agrisol.Jarvis_appstore_profile-name"]
+    widget_profile = ENV["sigh_com.agrisol.Jarvis.Widgets_appstore_profile-name"]
     update_code_signing_settings(
       use_automatic_signing: false,
       path: "Jarvis.xcodeproj",
       team_id: "6V4DVV45UP",
       code_sign_identity: "Apple Distribution",
-      bundle_identifier: "com.agrisol.Jarvis",
-      profile_name: profile_name
+      targets: ["Jarvis"],
+      profile_name: app_profile
+    )
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "Jarvis.xcodeproj",
+      team_id: "6V4DVV45UP",
+      code_sign_identity: "Apple Distribution",
+      targets: ["JarvisWidgets"],
+      profile_name: widget_profile
     )
 
     build_app(
@@ -62,7 +76,10 @@ platform :ios do
       export_method: "app-store",
       export_options: {
         signingStyle: "manual",
-        provisioningProfiles: { "com.agrisol.Jarvis" => profile_name }
+        provisioningProfiles: {
+          "com.agrisol.Jarvis" => app_profile,
+          "com.agrisol.Jarvis.Widgets" => widget_profile
+        }
       }
     )
 
