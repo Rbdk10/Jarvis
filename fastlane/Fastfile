@@ -33,7 +33,7 @@ platform :ios do
       app_identifier: ["com.agrisol.Jarvis", "com.agrisol.Jarvis.Widgets"],
       api_key: api_key,
       git_url: "https://github.com/AnthonieDeKlerk78/jarvis-match.git",
-      readonly: false
+      readonly: true    # vault now holds both app + widget profiles — fetch only, never create
     )
 
     # Next build number = one above the latest already on TestFlight.
