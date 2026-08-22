@@ -50,8 +50,12 @@ final class ElevenLabsService: NSObject, ObservableObject {
         // mode .default + .defaultToSpeaker means there's no category switch to fail, and the
         // route resets to the speaker (still honouring AirPods/Bluetooth via .allowBluetooth).
         let session = AVAudioSession.sharedInstance()
+        // .mixWithOthers is REQUIRED for background speech: a backgrounded app may not activate
+        // a session that would interrupt/duck other audio (setActive throws OSStatus 560557684,
+        // AVAudioSessionErrorCodeCannotInterruptOthers) — which is why Jarvis heard you out of
+        // the app but couldn't reply. A mixable session activates from the background fine.
         try session.setCategory(.playAndRecord, mode: .default,
-                                options: [.defaultToSpeaker, .allowBluetooth])
+                                options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers])
         try session.setActive(true)
     }
 

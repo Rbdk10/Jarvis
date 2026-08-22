@@ -22,7 +22,11 @@ final class AudioRecorder: NSObject, ObservableObject {
 
     func start() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+        // .mixWithOthers so the session can (re)activate from the background without trying to
+        // interrupt other audio (OSStatus 560557684) — keeps the listen↔speak cycle working
+        // while the app is backgrounded.
+        try session.setCategory(.playAndRecord, mode: .default,
+                                options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers])
         try session.setActive(true)
 
         let settings: [String: Any] = [
@@ -92,8 +96,11 @@ final class WakeWordListener: ObservableObject {
 
         let session = AVAudioSession.sharedInstance()
         do {
+            // .mixWithOthers (not .duckOthers): a background app may not activate a session that
+            // ducks/interrupts others (OSStatus 560557684), which broke background speech. Mixing
+            // also means Jarvis no longer permanently ducks your music/podcasts while he listens.
             try session.setCategory(.playAndRecord, mode: .measurement,
-                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+                                    options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch { retryStart(); return }
 
