@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import PhotosUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var vm: JarvisViewModel
@@ -32,6 +33,9 @@ struct ContentView: View {
     @State private var expandedArtifact: JarvisArtifact?
 
     @State private var showLog = false
+    // Clipboard feedback for the activity log: the "copy all" button and per-row taps.
+    @State private var copiedAll = false
+    @State private var copiedRowID: UUID?
 
     // Confirm before clearing Jarvis's memory (the context gauge tap).
     @State private var showResetConfirm = false
@@ -335,6 +339,17 @@ struct ContentView: View {
                 Text("Activity").font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.7))
                 Spacer()
+                if !vm.activityLog.isEmpty {
+                    Button(action: copyAllLogs) {
+                        HStack(spacing: 4) {
+                            Image(systemName: copiedAll ? "checkmark" : "doc.on.doc")
+                            Text(copiedAll ? "Copied" : "Copy all")
+                        }
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(copiedAll ? Color.green : Color(uiColor: blueWhite).opacity(0.9))
+                    }
+                    .accessibilityLabel("Copy all activity to clipboard")
+                }
             }
             .padding(.horizontal, 14).padding(.top, 18).padding(.bottom, 10)
 
@@ -389,8 +404,34 @@ struct ContentView: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+            if copiedRowID == e.id {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.green)
+            }
         }
         .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture { copyRow(e) }   // tap any line to copy its text
+    }
+
+    /// Copy the whole activity log (timestamp + text per line) to the clipboard.
+    private func copyAllLogs() {
+        let text = vm.activityLog
+            .map { "\(clockString($0.time))  \($0.text)" }
+            .joined(separator: "\n")
+        UIPasteboard.general.string = text
+        withAnimation { copiedAll = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { withAnimation { copiedAll = false } }
+    }
+
+    /// Copy one activity line's text; briefly mark it with a checkmark.
+    private func copyRow(_ e: ActivityEntry) {
+        UIPasteboard.general.string = e.text
+        withAnimation { copiedRowID = e.id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            if copiedRowID == e.id { withAnimation { copiedRowID = nil } }
+        }
     }
 
     private func clockString(_ d: Date) -> String {
